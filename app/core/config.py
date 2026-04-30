@@ -1,4 +1,5 @@
-import os
+from typing import Any
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -11,12 +12,16 @@ class Settings(BaseSettings):
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440 # 24 hours
     
     DATABASE_URL: str = "sqlite+aiosqlite:///./sql_app.db"
-    ALLOWED_ORIGINS: list[str] = [
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3001",
-    ]
+    ALLOWED_ORIGINS: list[str] = ["*"]
+
+    @field_validator("ALLOWED_ORIGINS", mode="before")
+    @classmethod
+    def assemble_cors_origins(cls, v: Any) -> list[str] | str:
+        if isinstance(v, str) and not v.startswith("["):
+            return [i.strip() for i in v.split(",")]
+        elif isinstance(v, (list, str)):
+            return v
+        return v
     
     PAYSTACK_SECRET_KEY: str | None = None
     PAYSTACK_PUBLIC_KEY: str | None = None
