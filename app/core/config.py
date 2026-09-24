@@ -27,6 +27,8 @@ class Settings(BaseSettings):
     # Online-payment orders still unpaid after this long are cancelled (and
     # their stock released). Cash-on-delivery orders are never auto-cancelled.
     ORDER_PAYMENT_WINDOW_MINUTES: int = 30
+    # ...counted from the last payment attempt, but never longer than this in total.
+    ORDER_MAX_PAYMENT_HOLD_MINUTES: int = 120
 
     # Where the storefront lives — used to build links in emails.
     FRONTEND_URL: str = "http://localhost:3000"

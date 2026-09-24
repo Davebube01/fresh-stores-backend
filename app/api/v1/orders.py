@@ -10,6 +10,7 @@ from app.schemas.order import CancelOrderRequest, OrderCreate, OrderResponse, Or
 from app.crud.order import (
     UNPAID_STATUSES,
     cancel_order,
+    expire_if_overdue,
     get_order,
     get_user_order_counts,
     get_user_orders,
@@ -78,8 +79,8 @@ async def track_public_order(
             
     if not is_authorized:
         raise HTTPException(status_code=404, detail="Order not found or invalid credentials")
-        
-    return order
+
+    return await expire_if_overdue(db, order)
 
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order_by_id(
@@ -97,7 +98,7 @@ async def get_order_by_id(
     if order.user_id and (not current_user or current_user.id != order.user_id):
         raise HTTPException(status_code=404, detail="Order not found")
 
-    return order
+    return await expire_if_overdue(db, order)
 
 @router.get("/me/orders", response_model=List[OrderResponse])
 async def read_my_orders(

@@ -1,4 +1,5 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, computed_field
+from app.core.payment_window import payment_deadline
 from typing import List, Any
 from datetime import datetime
 from app.schemas.product import ProductResponse
@@ -98,6 +99,12 @@ class OrderResponse(BaseModel):
     cancellation_reason: str | None = None
     cancelled_by: str | None = None
     cancelled_at: datetime | None = None
+
+    @computed_field
+    @property
+    def payment_expires_at(self) -> datetime | None:
+        """Until when an unpaid online order can still be paid; null if it isn't awaiting payment."""
+        return payment_deadline(self.status, self.payment_method, self.created_at, self.updated_at)
 
     model_config = ConfigDict(from_attributes=True)
 

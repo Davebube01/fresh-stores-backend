@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -12,59 +13,93 @@ from sqlalchemy import select, update
 from app.schemas.payment import InitializePaymentRequest, InitializePaymentResponse, PaymentWebhook, PaymentWebhookSimulate
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.payment_window import payment_deadline
+from app.crud.order import UNPAID_STATUSES, cancel_order
+from app.models.user import User
+from app.utils.dependencies import get_optional_current_user
 from app.models.order import Order, OrderStatus
 from pypaystack2 import AsyncPaystackClient
 
 router = APIRouter()
+logger = logging.getLogger("payments")
 
 @router.post("/initialize", response_model=InitializePaymentResponse)
 async def initialize_payment(
     payment_in: InitializePaymentRequest,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
+    current_user: User | None = Depends(get_optional_current_user),
 ):
     """
-    Initialize a Paystack transaction for an existing PENDING order.
+    Start (or retry) a Paystack payment for an order that's still awaiting
+    payment. Safe to call more than once: each call issues a fresh reference,
+    and a payment made with an earlier reference is still matched to the
+    order by the webhook (see process_successful_payment).
     """
-    # 1. Verify the order exists and is pending
-    stmt = select(Order).where(Order.id == payment_in.order_id)
-    result = await db.execute(stmt)
+    result = await db.execute(select(Order).where(Order.id == payment_in.order_id))
     order = result.scalar_one_or_none()
-    
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-        
-    if order.status != OrderStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Order is not in pending status")
 
+    # Orders that belong to an account can only be paid from that account.
+    # Same answer as "doesn't exist" so ids can't be probed. Guest orders
+    # (no user) stay payable by id, as before.
+    if not order or (order.user_id and (not current_user or current_user.id != order.user_id)):
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    status = getattr(order.status, "value", order.status)
+    if status == "cancelled":
+        raise HTTPException(status_code=400, detail="This order has been cancelled, so it can't be paid.")
+    if status not in UNPAID_STATUSES:
+        raise HTTPException(status_code=400, detail="This order has already been paid for.")
+    if order.payment_method == "cod":
+        raise HTTPException(status_code=400, detail="This order is pay-on-delivery, so there's nothing to pay online.")
     if order.total_amount <= 0:
         raise HTTPException(status_code=400, detail="Order has nothing to charge")
 
-    # 2. Generate a unique payment reference
+    # Past its payment window but not yet swept: close it now (releasing its
+    # stock) rather than take money for an order that's about to be cancelled.
+    deadline = payment_deadline(order.status, order.payment_method, order.created_at, order.updated_at)
+    if deadline and deadline <= datetime.now(timezone.utc):
+        try:
+            await cancel_order(db, order.id, "Payment not completed", "system", allowed_from=list(UNPAID_STATUSES))
+        except ValueError:
+            pass  # someone else changed it first; the caller sees the new state on retry
+        raise HTTPException(
+            status_code=400,
+            detail="The time to pay for this order has run out, so it was cancelled. Please place a new order.",
+        )
+
+    if not settings.PAYSTACK_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Payment gateway not configured")
+
+    # Fresh reference per attempt. The previous one is kept until Paystack
+    # accepts the new one: a failed retry must not wipe a reference the
+    # customer may still be paying with in another tab.
+    previous_reference = order.payment_reference
     payment_reference = f"GOAT-{uuid.uuid4()}"
     order.payment_reference = payment_reference
     await db.commit()
 
-    # 3. Initialize Paystack transaction
-    if not settings.PAYSTACK_SECRET_KEY:
-        raise HTTPException(status_code=500, detail="Payment gateway not configured")
-
     paystack = AsyncPaystackClient(secret_key=settings.PAYSTACK_SECRET_KEY)
 
-    # Always charge the order's own server-computed total — never a
+    # Always charge the order's own server-computed total, never a
     # client-supplied amount, which would let a request simply name its own
     # price.
     amount_in_kobo = int(order.total_amount * 100)
-    
-    response = await paystack.transactions.initialize(
-        email=payment_in.email,
-        amount=amount_in_kobo,
-        reference=payment_reference,
-        metadata={"order_id": str(order.id)}
-    )
-    
+
+    try:
+        response = await paystack.transactions.initialize(
+            email=payment_in.email,
+            amount=amount_in_kobo,
+            reference=payment_reference,
+            metadata={"order_id": str(order.id)},
+        )
+    except Exception:
+        logger.exception("Paystack initialize failed for order %s", order.id)
+        order.payment_reference = previous_reference
+        await db.commit()
+        raise HTTPException(status_code=502, detail="We couldn't reach the payment provider. Please try again.")
+
     if not response.status:
-        # Reset the payment reference so they can try again
-        order.payment_reference = None
+        order.payment_reference = previous_reference
         await db.commit()
         raise HTTPException(status_code=400, detail=f"Paystack error: {response.message}")
 
@@ -130,40 +165,94 @@ async def simulate_webhook(
     return {"status": "success", "message": f"Payment simulated for {payload.reference}"}
 
 
+def _metadata_order_id(gateway_response: dict) -> str | None:
+    metadata = (gateway_response or {}).get("metadata")
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except ValueError:
+            return None
+    if isinstance(metadata, dict) and metadata.get("order_id"):
+        return str(metadata["order_id"])
+    return None
+
+
 async def process_successful_payment(reference: str, gateway_response: dict, db: AsyncSession):
     """
-    Helper to update order status upon successful payment.
+    Records a successful charge against its order.
+
+    The order is found by reference first, then by the order_id we attach to
+    every transaction as metadata. The fallback matters because a retry issues
+    a new reference and overwrites the stored one: a payment completed with
+    the *earlier* reference would otherwise match nothing and be lost.
     """
+    result = await db.execute(select(Order.id).where(Order.payment_reference == reference))
+    order_id = result.scalar_one_or_none()
+    if order_id is None:
+        order_id = _metadata_order_id(gateway_response)
+    if order_id is None:
+        logger.warning("Successful payment %s matched no order", reference)
+        return
+
     # One conditional UPDATE, so a payment and a cancellation racing each
-    # other can't overwrite one another: whichever lands first wins.
+    # other can't overwrite one another: whichever lands first wins. The
+    # reference that actually paid becomes the order's payment_reference.
     now = datetime.now(timezone.utc)
     updated = await db.execute(
         update(Order)
         .where(
-            Order.payment_reference == reference,
+            Order.id == order_id,
             Order.status.in_([OrderStatus.PENDING, OrderStatus.AWAITING_VERIFICATION]),
         )
-        .values(status=OrderStatus.PROCESSING, paid_at=now, payment_gateway_response=gateway_response)
+        .values(
+            status=OrderStatus.PROCESSING,
+            paid_at=now,
+            payment_reference=reference,
+            payment_gateway_response=gateway_response,
+        )
         .execution_options(synchronize_session=False)
     )
     if updated.rowcount:
         await db.commit()
         return
 
-    # Not moved to processing. If that's because the order was already
-    # cancelled (e.g. the customer paid just as it timed out), the money is
-    # real but the order is dead — keep the evidence and flag it for a refund
-    # instead of silently dropping the payment.
-    result = await db.execute(select(Order).where(Order.payment_reference == reference))
+    result = await db.execute(select(Order).where(Order.id == order_id))
     order = result.scalar_one_or_none()
-    if order and order.status == OrderStatus.CANCELLED and order.paid_at is None:
+    if order is None:
+        return
+
+    # Cancelled before the money arrived (e.g. it timed out while the
+    # customer was paying): the payment is real but the order is dead. Keep
+    # the evidence and flag it for a refund instead of silently dropping it.
+    if order.status == OrderStatus.CANCELLED and order.paid_at is None:
         order.paid_at = now
+        order.payment_reference = reference
         order.payment_gateway_response = gateway_response
         await db.commit()
-        logging.getLogger("payments").warning(
-            "PAYMENT RECEIVED FOR CANCELLED ORDER %s (reference %s) - refund needed", order.id, reference
-        )
-        
+        logger.warning("PAYMENT RECEIVED FOR CANCELLED ORDER %s (reference %s) - refund needed", order.id, reference)
+        return
+
+    # Already paid, and this is a *different* reference: the customer paid
+    # twice (e.g. retried while a first payment was still confirming).
+    # The same reference again is just Paystack re-delivering the webhook.
+    if order.paid_at is not None and order.payment_reference != reference:
+        recorded = dict(order.payment_gateway_response or {})
+        extra = list(recorded.get("extra_payments", []))
+        if not any(e.get("reference") == reference for e in extra):
+            extra.append({
+                "reference": reference,
+                "received_at": now.isoformat(),
+                "amount": (gateway_response or {}).get("amount"),
+            })
+            recorded["extra_payments"] = extra
+            order.payment_gateway_response = recorded
+            await db.commit()
+            logger.error(
+                "DUPLICATE PAYMENT for order %s (reference %s; order was already paid with %s) - refund needed",
+                order.id, reference, order.payment_reference,
+            )
+
+
 # ================== LOCAL DEVELOPMENT TESTING FLOW ==================
 # 1. Start server with ENV=development.
 # 2. Call /api/v1/orders/checkout to create a pending order.

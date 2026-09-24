@@ -11,6 +11,7 @@ from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from app.core.cache import clear_product_caches
 from app.core.config import settings
+from app.core.payment_window import payment_deadline
 from app.crud.product import restore_stock
 from app.models.order import Order, OrderItem
 from app.models.delivery import Delivery
@@ -219,13 +220,16 @@ async def expire_stale_unpaid_orders(db: AsyncSession, older_than: Optional[time
     stop holding stock. Cash-on-delivery orders are unpaid by design and are
     left alone. Returns how many were cancelled.
     """
-    older_than = older_than or timedelta(minutes=settings.ORDER_PAYMENT_WINDOW_MINUTES)
-    cutoff = datetime.now(timezone.utc) - older_than
+    window = older_than or timedelta(minutes=settings.ORDER_PAYMENT_WINDOW_MINUTES)
+    cap = timedelta(minutes=settings.ORDER_MAX_PAYMENT_HOLD_MINUTES)
+    now = datetime.now(timezone.utc)
 
+    # Same rule as core.payment_window.payment_deadline: idle for a full
+    # window since the last payment attempt, or past the hard cap.
     result = await db.execute(
         select(Order.id).where(
             Order.status.in_(UNPAID_STATUSES),
-            Order.created_at < cutoff,
+            or_(Order.updated_at < now - window, Order.created_at < now - cap),
             or_(Order.payment_method.is_(None), Order.payment_method != "cod"),
         )
     )
@@ -239,6 +243,22 @@ async def expire_stale_unpaid_orders(db: AsyncSession, older_than: Optional[time
     if cancelled:
         logger.info("Auto-cancelled %d unpaid order(s) older than %s", cancelled, older_than)
     return cancelled
+
+
+async def expire_if_overdue(db: AsyncSession, order: Order) -> Order:
+    """
+    If this order is past its payment deadline, cancel it right now instead of
+    waiting for the next background sweep, so someone looking at it (or about
+    to pay for it) never sees a dead order still marked as payable.
+    """
+    deadline = payment_deadline(order.status, order.payment_method, order.created_at, order.updated_at)
+    if deadline is None or deadline > datetime.now(timezone.utc):
+        return order
+    try:
+        return await cancel_order(db, order.id, "Payment not completed", "system", allowed_from=UNPAID_STATUSES) or order
+    except ValueError:
+        # Paid or cancelled by someone else in the meantime; show what it is now.
+        return await get_order(db, order.id) or order
 
 
 _last_expiry_sweep = 0.0
