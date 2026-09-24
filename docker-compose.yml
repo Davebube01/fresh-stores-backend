@@ -1,0 +1,54 @@
+# Explicit project name: without this, Compose defaults to the containing
+# directory's name ("backend"), which collides with any other project whose
+# compose file also happens to live in a folder called "backend" — Compose
+# then treats that other project's container as belonging to this one and
+# recreates (i.e. destroys and replaces) it. Learned this the hard way.
+name: meat-store-backend
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: meat-store-postgres
+    environment:
+      - POSTGRES_USER=meatstore
+      - POSTGRES_PASSWORD=meatstore
+      - POSTGRES_DB=meatstore
+    # Exposed on the host too, so Alembic, a GUI client (TablePlus,
+    # pgAdmin, DBeaver), or a non-Docker `python main.py` run can all
+    # connect at localhost:5432 as well as from inside the compose network.
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U meatstore"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+    container_name: meat-store-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Host 8000 -> container 8000. Port 8010 is already used by another app
+    # on this machine, so this deliberately avoids it. Change the left-hand
+    # side ("8000:8000" -> "<port>:8000") if 8000 is ever taken too.
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      # Local Postgres (the service above), reached by service name over
+      # the compose network — matches staging (Neon) and production
+      # (Render) far more closely than SQLite did.
+      - DATABASE_URL=postgresql+asyncpg://meatstore:meatstore@postgres:5432/meatstore
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
