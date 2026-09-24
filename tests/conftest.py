@@ -54,3 +54,8 @@ async def client() -> AsyncClient:
     """Async generator for the test client."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         yield c
+
+@pytest.fixture
+def session_factory():
+    """Open DB sessions on the test database (for seeding data directly)."""
+    return TestingSessionLocal

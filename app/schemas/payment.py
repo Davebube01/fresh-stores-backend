@@ -3,10 +3,10 @@ from typing import Any
 
 class InitializePaymentRequest(BaseModel):
     email: EmailStr
-    amount: float
-    delivery_fee: float
-    delivery_address: str
     order_id: str
+    # No amount field on purpose: the amount charged is always the order's
+    # own total_amount, looked up server-side — never trust a client-sent
+    # figure for what to charge.
 
 class InitializePaymentResponse(BaseModel):
     authorization_url: str

@@ -8,7 +8,9 @@ from app.schemas.user import UserCreate
 from app.core.security import get_password_hash
 
 async def get_user_by_email(db: AsyncSession, email: str) -> Optional[User]:
-    result = await db.execute(select(User).where(User.email == email))
+    # Emails are stored lowercase (see RegisterRequest), so normalize here too
+    # — otherwise "Name@x.com" at login wouldn't match "name@x.com" on file.
+    result = await db.execute(select(User).where(User.email == email.strip().lower()))
     return result.scalars().first()
 
 async def get_user(db: AsyncSession, user_id: str) -> Optional[User]:
@@ -42,7 +44,8 @@ async def seed_admin_user(db: AsyncSession):
             hashed_password=hashed_password,
             full_name="System Administrator",
             is_active=True,
-            is_superuser=True
+            is_superuser=True,
+            email_verified=True,
         )
         db.add(db_user)
         await db.commit()

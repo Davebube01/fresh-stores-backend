@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import logging
 import uuid
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.schemas.payment import InitializePaymentRequest, InitializePaymentResponse, PaymentWebhook, PaymentWebhookSimulate
 from app.core.config import settings
@@ -33,6 +36,9 @@ async def initialize_payment(
     if order.status != OrderStatus.PENDING:
         raise HTTPException(status_code=400, detail="Order is not in pending status")
 
+    if order.total_amount <= 0:
+        raise HTTPException(status_code=400, detail="Order has nothing to charge")
+
     # 2. Generate a unique payment reference
     payment_reference = f"GOAT-{uuid.uuid4()}"
     order.payment_reference = payment_reference
@@ -41,11 +47,13 @@ async def initialize_payment(
     # 3. Initialize Paystack transaction
     if not settings.PAYSTACK_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Payment gateway not configured")
-        
+
     paystack = AsyncPaystackClient(secret_key=settings.PAYSTACK_SECRET_KEY)
-    
-    # Amount should be in kobo (multiply by 100)
-    amount_in_kobo = int(payment_in.amount * 100)
+
+    # Always charge the order's own server-computed total — never a
+    # client-supplied amount, which would let a request simply name its own
+    # price.
+    amount_in_kobo = int(order.total_amount * 100)
     
     response = await paystack.transactions.initialize(
         email=payment_in.email,
@@ -71,19 +79,26 @@ async def initialize_payment(
 async def paystack_webhook(
     request: Request,
     webhook_data: PaymentWebhook,
-    x_paystack_signature: str | None = Header(None),
+    x_paystack_signature: str | None = Header(None, alias="x-paystack-signature"),
     x_simulated: str | None = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Webhook endpoint called by Paystack in production.
     """
-    # In production, verify signature
     if settings.ENV == "production":
-        # Verification logic would go here:
-        # using hmac and settings.PAYSTACK_SECRET_KEY
-        # For brevity, we assume signature is verified if not simulated
-        pass
+        if not settings.PAYSTACK_SECRET_KEY:
+            raise HTTPException(status_code=500, detail="Payment gateway not configured")
+
+        raw_body = await request.body()
+        expected_signature = hmac.new(
+            settings.PAYSTACK_SECRET_KEY.encode("utf-8"),
+            raw_body,
+            hashlib.sha512,
+        ).hexdigest()
+
+        if not x_paystack_signature or not hmac.compare_digest(expected_signature, x_paystack_signature):
+            raise HTTPException(status_code=401, detail="Invalid webhook signature")
     else:
         # In development, allow simulated requests if header is present
         if not x_simulated:
@@ -119,15 +134,35 @@ async def process_successful_payment(reference: str, gateway_response: dict, db:
     """
     Helper to update order status upon successful payment.
     """
-    stmt = select(Order).where(Order.payment_reference == reference)
-    result = await db.execute(stmt)
+    # One conditional UPDATE, so a payment and a cancellation racing each
+    # other can't overwrite one another: whichever lands first wins.
+    now = datetime.now(timezone.utc)
+    updated = await db.execute(
+        update(Order)
+        .where(
+            Order.payment_reference == reference,
+            Order.status.in_([OrderStatus.PENDING, OrderStatus.AWAITING_VERIFICATION]),
+        )
+        .values(status=OrderStatus.PROCESSING, paid_at=now, payment_gateway_response=gateway_response)
+        .execution_options(synchronize_session=False)
+    )
+    if updated.rowcount:
+        await db.commit()
+        return
+
+    # Not moved to processing. If that's because the order was already
+    # cancelled (e.g. the customer paid just as it timed out), the money is
+    # real but the order is dead — keep the evidence and flag it for a refund
+    # instead of silently dropping the payment.
+    result = await db.execute(select(Order).where(Order.payment_reference == reference))
     order = result.scalar_one_or_none()
-    
-    if order and order.status in [OrderStatus.PENDING, OrderStatus.AWAITING_VERIFICATION]:
-        order.status = OrderStatus.PROCESSING
-        order.paid_at = datetime.now(timezone.utc)
+    if order and order.status == OrderStatus.CANCELLED and order.paid_at is None:
+        order.paid_at = now
         order.payment_gateway_response = gateway_response
         await db.commit()
+        logging.getLogger("payments").warning(
+            "PAYMENT RECEIVED FOR CANCELLED ORDER %s (reference %s) - refund needed", order.id, reference
+        )
         
 # ================== LOCAL DEVELOPMENT TESTING FLOW ==================
 # 1. Start server with ENV=development.

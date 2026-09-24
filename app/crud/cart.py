@@ -49,7 +49,7 @@ async def add_cart_item(db: AsyncSession, cart_id: str, item: CartItemCreate) ->
         )
     )
     db_item = result.scalars().first()
-    
+
     if db_item:
         db_item.quantity += item.quantity
     else:
@@ -60,23 +60,36 @@ async def add_cart_item(db: AsyncSession, cart_id: str, item: CartItemCreate) ->
             selected_option=item.selected_option
         )
         db.add(db_item)
-    
+
     await db.commit()
-    await db.refresh(db_item)
-    return db_item
+
+    # Re-fetch with the product relationship eager-loaded: CartItemResponse
+    # requires `product`, and lazy-loading it after the session dependency
+    # closes (during response serialization) raises MissingGreenlet.
+    result = await db.execute(
+        select(CartItem).options(selectinload(CartItem.product)).where(CartItem.id == db_item.id)
+    )
+    return result.scalars().one()
 
 async def update_cart_item(db: AsyncSession, item_id: str, quantity: int) -> Optional[CartItem]:
     result = await db.execute(select(CartItem).where(CartItem.id == item_id))
     db_item = result.scalars().first()
-    if db_item:
-        if quantity <= 0:
-            db.delete(db_item)
-        else:
-            db_item.quantity = quantity
+    if not db_item:
+        return None
+
+    if quantity <= 0:
+        await db.delete(db_item)
         await db.commit()
-        if quantity > 0:
-            await db.refresh(db_item)
-    return db_item if quantity > 0 else None
+        return None
+
+    db_item.quantity = quantity
+    await db.commit()
+
+    # Re-fetch with the product relationship eager-loaded (see add_cart_item).
+    result = await db.execute(
+        select(CartItem).options(selectinload(CartItem.product)).where(CartItem.id == item_id)
+    )
+    return result.scalars().one()
 
 async def remove_cart_item(db: AsyncSession, item_id: str):
     result = await db.execute(select(CartItem).where(CartItem.id == item_id))

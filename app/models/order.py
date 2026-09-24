@@ -47,6 +47,12 @@ class Order(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     paid_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Every cancelled order carries a reason (enforced in crud.order.cancel_order).
+    cancellation_reason = Column(String, nullable=True)
+    # "customer" | "admin" | "system" (e.g. an unpaid order that timed out)
+    cancelled_by = Column(String, nullable=True)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     user = relationship("User")
     delivery = relationship("Delivery", back_populates="order", uselist=False)

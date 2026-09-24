@@ -44,3 +44,32 @@ async def send_order_confirmation(email: str, order_id: str, total_amount: float
     
     # Output the dispatched message locally for verification
     logger.info(f"Delivering Order Confirmation to {email}:\n{email_body}")
+
+
+async def send_verification_email(email: str, full_name: str | None, verify_url: str) -> None:
+    """
+    Simulated for now (logs the message, including the link, to the backend
+    console). Swap the body for a real provider (Resend, Brevo, ...) when one
+    is chosen — callers already run this as a background task.
+    """
+    greeting = f"Hi {full_name}," if full_name else "Hi,"
+    email_body = f"""
+    ========================================================
+    To: {email}
+    Subject: Confirm your email address - Meat Store
+    ========================================================
+    {greeting}
+
+    Welcome to Meat Store! Please confirm this email address so we can
+    keep your account secure and link any earlier orders to it.
+
+    >> CONFIRM YOUR EMAIL:
+    {verify_url}
+
+    This link expires in 48 hours. If you didn't create an account,
+    you can ignore this email.
+
+    The Support Team
+    ========================================================
+    """
+    logger.info(f"Delivering verification email to {email}:\n{email_body}")

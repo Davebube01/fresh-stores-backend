@@ -1,6 +1,12 @@
 from typing import Any
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+INSECURE_DEFAULT_SECRET_KEYS = {
+    "super-secret-key-change-in-production",
+    "changeme",
+    "secret",
+}
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Goat Meat Store API"
@@ -9,10 +15,33 @@ class Settings(BaseSettings):
     
     SECRET_KEY: str = "super-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440 # 24 hours
+    # Access tokens are short-lived and held in memory by the frontend; a
+    # longer-lived refresh token (httpOnly cookie, rotated on use) mints new
+    # ones. See app/services/auth_service.py.
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_DAYS: int = 30       # customer "keep me signed in"
+    REFRESH_SESSION_HOURS: int = 24    # customer without it (cookie is also session-only)
+    ADMIN_SESSION_HOURS: int = 12      # admin: no remember-me, fixed working-day cap
+    VERIFY_EMAIL_HOURS: int = 48
+
+    # Online-payment orders still unpaid after this long are cancelled (and
+    # their stock released). Cash-on-delivery orders are never auto-cancelled.
+    ORDER_PAYMENT_WINDOW_MINUTES: int = 30
+
+    # Where the storefront lives — used to build links in emails.
+    FRONTEND_URL: str = "http://localhost:3000"
+
+    # Refresh-token cookie. SameSite=Lax needs the frontend and API on the
+    # same *site* (e.g. www.shop.com + api.shop.com); "localhost" and
+    # "127.0.0.1" count as different sites, so use one consistently in dev.
+    COOKIE_SECURE: bool | None = None   # None -> True in production, else False
+    COOKIE_SAMESITE: str = "lax"
+    COOKIE_DOMAIN: str | None = None
     
     DATABASE_URL: str = "sqlite+aiosqlite:///./sql_app.db"
-    ALLOWED_ORIGINS: list[str] = ["*"]
+    # Explicit origins (no "*"): cookies are sent with credentials, which the
+    # CORS spec forbids combining with a wildcard.
+    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
@@ -25,8 +54,17 @@ class Settings(BaseSettings):
     
     PAYSTACK_SECRET_KEY: str | None = None
     PAYSTACK_PUBLIC_KEY: str | None = None
+
+    CLOUDINARY_CLOUD_NAME: str | None = None
+    CLOUDINARY_API_KEY: str | None = None
+    CLOUDINARY_API_SECRET: str | None = None
+
     ENV: str = "development"
     
+    @property
+    def cookie_secure(self) -> bool:
+        return self.COOKIE_SECURE if self.COOKIE_SECURE is not None else self.ENV == "production"
+
     @property
     def async_database_url(self) -> str:
         """Handle Render's postgres:// vs sqlalchemy's postgresql+asyncpg://"""
@@ -38,5 +76,18 @@ class Settings(BaseSettings):
         return url
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    @model_validator(mode="after")
+    def _validate_production_secret_key(self) -> "Settings":
+        if self.ENV == "production" and (
+            self.SECRET_KEY in INSECURE_DEFAULT_SECRET_KEYS or len(self.SECRET_KEY) < 32
+        ):
+            raise ValueError(
+                "SECRET_KEY must be set to a strong, unique value (32+ characters) when ENV=production. "
+                'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
+            )
+        if self.ENV == "production" and "*" in self.ALLOWED_ORIGINS:
+            raise ValueError("ALLOWED_ORIGINS must list explicit origins (not '*') when ENV=production.")
+        return self
 
 settings = Settings()

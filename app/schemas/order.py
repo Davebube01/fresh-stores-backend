@@ -43,6 +43,42 @@ class OrderCreate(BaseModel):
     items: List[OrderItemCreate] | None = None # Can be populated from request or from DB cart
     cart_id: str | None = None # If checking out from existing cart
 
+class DeliveryResponse(BaseModel):
+    id: str
+    address: str
+    apartment: str | None = None
+    city: str
+    state: str
+    landmark: str | None = None
+    zip_code: str | None = None
+    instructions: str | None = None
+    delivery_zone: str
+    delivery_date: str | None = None
+    time_slot: str | None = None
+    tracking_number: str | None = None
+    delivery_status: str | None = None
+    # Courier is assigned manually by the admin at dispatch time — there's no
+    # live courier API, this is just a record of who's carrying the order.
+    courier_name: str | None = None
+    courier_phone: str | None = None
+    courier_service: str | None = None
+    courier_reference: str | None = None
+    # Shown to the customer; the courier must collect it and relay it back
+    # to confirm delivery. Deliberately included in the same response the
+    # customer reads — they're the one who's supposed to hold this.
+    delivery_pin: str | None = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class DispatchUpdate(BaseModel):
+    courier_name: str
+    courier_phone: str
+    courier_service: str  # e.g. "Bolt", "Personal Rider", "In-house"
+    courier_reference: str | None = None
+
+class ConfirmDeliveryRequest(BaseModel):
+    pin: str
+
 class OrderResponse(BaseModel):
     id: str
     user_id: str | None = None
@@ -55,8 +91,23 @@ class OrderResponse(BaseModel):
     delivery_fee: float
     total_amount: float
     items: List[OrderItemResponse] = []
+    delivery: DeliveryResponse | None = None
     created_at: datetime
     updated_at: datetime
     paid_at: datetime | None = None
-    
+    cancellation_reason: str | None = None
+    cancelled_by: str | None = None
+    cancelled_at: datetime | None = None
+
     model_config = ConfigDict(from_attributes=True)
+
+
+class CancelOrderRequest(BaseModel):
+    reason: str
+
+
+class OrderSummary(BaseModel):
+    all: int = 0
+    ongoing: int = 0
+    completed: int = 0
+    cancelled: int = 0

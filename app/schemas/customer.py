@@ -13,5 +13,18 @@ class CustomerResponse(BaseModel):
     totalSpent: float
     status: str = "active"
 
+class CustomerOrderItem(BaseModel):
+    id: str
+    quantity: int
+
+
+class CustomerOrderSummary(BaseModel):
+    id: str
+    status: str
+    total_amount: float
+    created_at: datetime
+    items: list[CustomerOrderItem] = []
+
+
 class CustomerDetailResponse(CustomerResponse):
-    orders: list = []
+    recent_orders: list[CustomerOrderSummary] = []
