@@ -78,6 +78,15 @@ class ProductResponse(ProductBase):
     model_config = ConfigDict(from_attributes=True)
 
 
+class ProductDetailResponse(BaseModel):
+    """Everything the storefront product page needs, in one request."""
+    product: ProductResponse
+    # Display name of product.category (a slug); null if it isn't a known,
+    # active category.
+    category_name: str | None = None
+    related: list[ProductResponse] = []
+
+
 class StockAdjustmentRequest(BaseModel):
     # Positive to add stock (restock), negative to remove it (correction —
     # e.g. spoilage, a recount, damaged goods).

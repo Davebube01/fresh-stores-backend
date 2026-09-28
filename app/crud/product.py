@@ -13,6 +13,20 @@ async def get_product(db: AsyncSession, product_id: str) -> Optional[Product]:
     result = await db.execute(select(Product).where(Product.id == product_id))
     return result.scalars().first()
 
+async def get_active_product_by_slug(db: AsyncSession, slug: str) -> Optional[Product]:
+    result = await db.execute(select(Product).where(Product.slug == slug, Product.is_active == True))
+    return result.scalars().first()
+
+async def get_related_products(db: AsyncSession, product: Product, limit: int = 4) -> List[Product]:
+    """Other active products in the same category, in-stock ones first."""
+    result = await db.execute(
+        select(Product)
+        .where(Product.is_active == True, Product.category == product.category, Product.id != product.id)
+        .order_by((Product.stock_quantity > 0).desc(), Product.name.asc())
+        .limit(limit)
+    )
+    return result.scalars().all()
+
 async def get_products(db: AsyncSession, skip: int = 0, limit: int = 100, search: Optional[str] = None) -> List[Product]:
     query = select(Product).where(Product.is_active == True)
     if search:

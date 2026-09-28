@@ -32,3 +32,5 @@ def clear_product_caches() -> None:
 def clear_category_cache() -> None:
     """Call after any admin write to categories so changes are visible immediately."""
     category_cache.clear()
+    # Product detail responses embed the category's name.
+    product_detail_cache.clear()
