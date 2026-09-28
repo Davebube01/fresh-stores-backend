@@ -82,6 +82,26 @@ def _item_profit(item: OrderItem) -> float | None:
     return item.quantity * (float(item.price_at_time or 0) - cost)
 
 
+def _order_profit(order: Order) -> tuple[float, float]:
+    """
+    (profit, revenue it covers) for one order, over items with a known cost.
+    A counter discount comes off both, in proportion to the costed share.
+    """
+    profit = costed = 0.0
+    for item in order.items:
+        item_profit = _item_profit(item)
+        if item_profit is not None:
+            profit += item_profit
+            costed += item.quantity * float(item.price_at_time or 0)
+    discount = float(order.discount_amount or 0)
+    subtotal = float(order.subtotal or 0)
+    if discount and costed and subtotal:
+        share = discount * costed / subtotal
+        profit -= share
+        costed -= share
+    return profit, costed
+
+
 def _customer_name(order: Order) -> str:
     if order.user is not None:
         return order.user.full_name or order.user.email.split("@")[0]
@@ -179,6 +199,7 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
 
     # --- KPIs + top products ---------------------------------------------
     revenue = revenue_prev = 0.0
+    walk_in_revenue = 0.0
     orders = orders_prev = 0
     profit = profit_prev = 0.0
     costed_revenue = costed_revenue_prev = 0.0
@@ -195,11 +216,13 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
         if start <= paid_at <= now:
             revenue += amount
             orders += 1
+            if order.channel == "walk_in":
+                walk_in_revenue += amount
+            order_profit, order_costed = _order_profit(order)
+            profit += order_profit
+            costed_revenue += order_costed
             for item in order.items:
                 item_profit = _item_profit(item)
-                if item_profit is not None:
-                    profit += item_profit
-                    costed_revenue += item.quantity * float(item.price_at_time or 0)
                 row = by_product.setdefault(item.product_id, {
                     "product_id": item.product_id,
                     "name": item.product.name if item.product else "Deleted product",
@@ -216,11 +239,9 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
         elif prev_start <= paid_at < start:
             revenue_prev += amount
             orders_prev += 1
-            for item in order.items:
-                item_profit = _item_profit(item)
-                if item_profit is not None:
-                    profit_prev += item_profit
-                    costed_revenue_prev += item.quantity * float(item.price_at_time or 0)
+            order_profit, order_costed = _order_profit(order)
+            profit_prev += order_profit
+            costed_revenue_prev += order_costed
 
     revenue_series = []
     for i in range(series_days):
@@ -238,7 +259,8 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
     # --- Status breakdown (every order placed in the period) -------------
     placed = (
         await db.execute(
-            select(Order.status).where(Order.created_at >= start.astimezone(timezone.utc))
+            # Storefront orders only: walk-in sales are complete the moment they're rung up.
+            select(Order.status).where(Order.created_at >= start.astimezone(timezone.utc), Order.channel == "online")
         )
     ).scalars().all()
     counts: dict[str, int] = defaultdict(int)
@@ -331,7 +353,8 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
     # --- Recent orders ---------------------------------------------------
     recent = (
         await db.execute(
-            select(Order).options(*_order_options()).order_by(Order.created_at.desc()).limit(6)
+            select(Order).options(*_order_options()).where(Order.channel == "online")
+            .order_by(Order.created_at.desc()).limit(6)
         )
     ).scalars().all()
 
@@ -348,6 +371,8 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
             "orders": orders,
             "orders_prev": orders_prev,
             "avg_order_value": aov,
+            # Of revenue, what was taken at the counter (walk-in sales).
+            "walk_in_revenue": walk_in_revenue,
             "avg_order_value_prev": aov_prev,
             # Profit figures are null when no sold item had a known cost.
             "gross_profit": profit if costed_revenue else None,

@@ -112,6 +112,9 @@ class OrderResponse(BaseModel):
     cancellation_reason: str | None = None
     cancelled_by: str | None = None
     cancelled_at: datetime | None = None
+    channel: str = "online"
+    discount_amount: float = 0.0
+    discount_note: str | None = None
 
     @computed_field
     @property

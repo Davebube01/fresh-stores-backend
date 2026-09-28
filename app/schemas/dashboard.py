@@ -13,6 +13,8 @@ class DashboardKpis(BaseModel):
     orders_prev: int
     avg_order_value: float
     avg_order_value_prev: float
+    # Of revenue, what was taken at the counter (walk-in sales).
+    walk_in_revenue: float = 0.0
     # Revenue minus cost, over items whose cost is known; null when none are.
     gross_profit: float | None = None
     gross_profit_prev: float | None = None

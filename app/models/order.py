@@ -53,8 +53,16 @@ class Order(Base):
     cancelled_by = Column(String, nullable=True)
     cancelled_at = Column(DateTime(timezone=True), nullable=True)
 
+    # "online" (storefront checkout) or "walk_in" (sold at the counter by an admin).
+    channel = Column(String, nullable=False, default="online", server_default="online", index=True)
+    # The admin who rang up a walk-in sale.
+    served_by = Column(String, ForeignKey("users.id"), nullable=True)
+    # Taken off the subtotal at the counter; total_amount is already net of it.
+    discount_amount = Column(Float, nullable=False, default=0.0, server_default="0")
+    discount_note = Column(String, nullable=True)
+
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
-    user = relationship("User")
+    user = relationship("User", foreign_keys=[user_id])
     delivery = relationship("Delivery", back_populates="order", uselist=False)
 
 class OrderItem(Base):

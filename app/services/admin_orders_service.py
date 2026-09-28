@@ -19,6 +19,9 @@ from app.models.user import User
 WAT = timezone(timedelta(hours=1))
 S = OrderStatus
 
+# Walk-in (counter) sales live on the Sales page, not here.
+ONLINE = "online"
+
 _COD_PENDING = and_(Order.status == S.PENDING, Order.payment_method == "cod")
 
 VIEW_FILTERS = {
@@ -91,6 +94,7 @@ def to_row(order: Order, now: Optional[datetime] = None) -> dict:
             "id", "user_id", "guest_info", "payment_method", "payment_reference", "subtotal", "delivery_fee",
             "total_amount", "items", "delivery", "created_at", "updated_at", "paid_at",
             "cancellation_reason", "cancelled_by", "cancelled_at",
+            "channel", "discount_amount", "discount_note",
         )},
         "status": status_value(order),
         "delivery_method": getattr(order.delivery_method, "value", order.delivery_method) or "delivery",
@@ -135,6 +139,7 @@ async def list_admin_orders(
         .options(*_options())
         .outerjoin(User, User.id == Order.user_id)
         .outerjoin(Delivery, Delivery.order_id == Order.id)
+        .where(Order.channel == ONLINE)
     )
     if VIEW_FILTERS.get(view) is not None:
         query = query.where(VIEW_FILTERS[view])
@@ -169,7 +174,7 @@ async def list_admin_orders(
 async def orders_summary(db: AsyncSession) -> dict:
     counts = {}
     for view, cond in VIEW_FILTERS.items():
-        q = select(func.count(Order.id))
+        q = select(func.count(Order.id)).where(Order.channel == ONLINE)
         if cond is not None:
             q = q.where(cond)
         counts[view] = (await db.execute(q)).scalar_one()
