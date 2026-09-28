@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.admin import products, categories, auth, customers, orders, dashboard, inventory, settings, notifications, sales
+from app.api.admin import products, categories, auth, customers, orders, dashboard, inventory, settings, notifications, sales, activity, exports
 
 admin_router = APIRouter()
 admin_router.include_router(auth.router, prefix="/auth", tags=["admin-auth"])
@@ -7,6 +7,8 @@ admin_router.include_router(dashboard.router, prefix="/dashboard", tags=["admin-
 admin_router.include_router(inventory.router, prefix="/inventory", tags=["admin-inventory"])
 admin_router.include_router(notifications.router, prefix="/notifications", tags=["admin-notifications"])
 admin_router.include_router(sales.router, prefix="/sales", tags=["admin-sales"])
+admin_router.include_router(activity.router, prefix="/activity", tags=["admin-activity"])
+admin_router.include_router(exports.router, prefix="/exports", tags=["admin-exports"])
 admin_router.include_router(settings.router, prefix="/settings", tags=["admin-settings"])
 admin_router.include_router(products.router, tags=["admin-products"])
 admin_router.include_router(categories.router, tags=["admin-categories"])

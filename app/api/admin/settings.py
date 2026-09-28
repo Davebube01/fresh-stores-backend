@@ -8,6 +8,7 @@ from app.schemas.settings import (
 from app.services.settings_service import (
     ZoneError, get_store_settings, list_zones, payment_status, replace_zones, update_store_settings,
 )
+from app.services.activity_service import diff, log_activity
 from app.utils.dependencies import get_current_active_superuser
 
 router = APIRouter()
@@ -33,7 +34,14 @@ async def put_store_details(
     db: AsyncSession = Depends(get_db),
     current_admin=Depends(get_current_active_superuser),
 ):
-    return StoreDetails.model_validate(await update_store_settings(db, details))
+    before = StoreDetails.model_validate(await get_store_settings(db)).model_dump()
+    saved = StoreDetails.model_validate(await update_store_settings(db, details))
+    changes = diff(before, saved.model_dump())
+    if changes:
+        await log_activity(db, current_admin, "settings.store_updated", "settings",
+                           f"Updated store details: {', '.join(k.replace('_', ' ') for k in changes)}",
+                           entity_label="Store details", changes=changes)
+    return saved
 
 
 @router.put("/zones", response_model=list[DeliveryZoneOut])
@@ -43,7 +51,16 @@ async def put_delivery_zones(
     current_admin=Depends(get_current_active_superuser),
 ):
     """Replace the zone list (order = display order). Checkout uses the new fees immediately."""
+    before = {z["name"]: z["fee"] for z in await list_zones(db) if z["is_active"]}
     try:
-        return await replace_zones(db, update)
+        zones = await replace_zones(db, update)
     except ZoneError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    after = {z["name"] if isinstance(z, dict) else z.name: (z["fee"] if isinstance(z, dict) else z.fee)
+             for z in zones if (z["is_active"] if isinstance(z, dict) else z.is_active)}
+    changes = diff(before, after) | {k: {"from": v, "to": None} for k, v in before.items() if k not in after}
+    if changes:
+        await log_activity(db, current_admin, "settings.zones_updated", "settings",
+                           f"Updated delivery zones: {', '.join(changes)}",
+                           entity_label="Delivery zones", changes=changes)
+    return zones

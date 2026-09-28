@@ -72,6 +72,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Lets the admin read the file name of CSV exports.
+    expose_headers=["Content-Disposition"],
 )
 
 from app.api.admin.api import admin_router

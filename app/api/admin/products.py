@@ -11,12 +11,27 @@ from app.core.database import get_db
 from app.core.pagination import MAX_PAGE_SIZE
 from app.crud.product import create_product, update_product, get_product, get_admin_products, adjust_stock, get_stock_movements
 from app.schemas.product import AdminProductResponse, ProductCreate, ProductUpdate, StockAdjustmentRequest, StockMovementResponse
+from app.core.product_options import normalize_weight_options
+from app.services.activity_service import diff, log_activity, snapshot
 from app.services.settings_service import get_low_stock_threshold
 from app.services.stock_alerts import effective_threshold
 from app.utils.dependencies import get_current_active_superuser
 from sqlalchemy.future import select
 
 router = APIRouter()
+
+# Fields worth recording when a product is edited.
+TRACKED = ("name", "price", "cost_price", "weight_options", "parts", "category", "is_active",
+           "low_stock_threshold", "description", "image_url")
+FIELD_NAMES = {"cost_price": "cost price", "weight_options": "sizes", "parts": "cuts", "is_active": "visibility",
+               "low_stock_threshold": "low-stock alert", "image_url": "image"}
+
+def _product_snapshot(product) -> dict:
+    values = snapshot(product, TRACKED)
+    # Older rows store sizes as bare labels; compare in the saved form so the
+    # first save after the upgrade isn't logged as a size change.
+    values["weight_options"] = normalize_weight_options(values["weight_options"], product.price)
+    return values
 
 async def _with_threshold(db: AsyncSession, products):
     """Set effective_low_stock_threshold (own value, else the store default) for the response."""
@@ -86,7 +101,9 @@ async def create_new_product(
 ):
     product = await create_product(db, product_in)
     clear_product_caches()
-    return await _with_threshold(db, product)
+    await log_activity(db, current_user, "product.created", "product", f"Added product {product.name}",
+                       entity_id=product.id, entity_label=product.name)
+    return await _with_threshold(db, await get_product(db, product.id))
 
 @router.put("/products/{product_id}", response_model=AdminProductResponse)
 async def update_existing_product(
@@ -95,11 +112,18 @@ async def update_existing_product(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_active_superuser)
 ):
+    existing = await get_product(db, product_id)
+    before = _product_snapshot(existing) if existing else {}
     product = await update_product(db, product_id, product_in)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     clear_product_caches()
-    return await _with_threshold(db, product)
+    changes = diff(before, _product_snapshot(product))
+    if changes:
+        fields = ", ".join(FIELD_NAMES.get(f, f) for f in changes)
+        await log_activity(db, current_user, "product.updated", "product", f"Updated {product.name}: {fields}",
+                           entity_id=product.id, entity_label=product.name, changes=changes)
+    return await _with_threshold(db, await get_product(db, product_id))
 
 @router.post("/products/{product_id}/stock", response_model=AdminProductResponse)
 async def adjust_product_stock(
@@ -124,7 +148,15 @@ async def adjust_product_stock(
         raise HTTPException(status_code=400, detail="Product not found, or adjustment would take stock below zero")
 
     clear_product_caches()
-    return await _with_threshold(db, product)
+    change = adjustment.change
+    verb = f"Added {change:g} to" if change > 0 else f"Removed {-change:g} from"
+    note = f" — {adjustment.note}" if adjustment.note else ""
+    await log_activity(
+        db, current_user, "stock.adjusted", "product", f"{verb} {product.name} stock ({adjustment.reason}){note}",
+        entity_id=product.id, entity_label=product.name,
+        changes={"stock": {"from": product.stock_quantity - change, "to": product.stock_quantity}},
+    )
+    return await _with_threshold(db, await get_product(db, product_id))
 
 @router.get("/products/{product_id}/stock-movements", response_model=List[StockMovementResponse])
 async def read_product_stock_movements(
@@ -147,6 +179,7 @@ async def delete_existing_product(
 ):
     # Let's add delete product to DB
     from app.crud.product import delete_product
+    existing = await get_product(db, product_id)
     try:
         deleted = await delete_product(db, product_id)
     except ValueError as e:
@@ -155,4 +188,6 @@ async def delete_existing_product(
         raise HTTPException(status_code=404, detail="Product not found")
 
     clear_product_caches()
+    await log_activity(db, current_user, "product.deleted", "product", f"Deleted product {existing.name}",
+                       entity_id=product_id, entity_label=existing.name)
     return {"ok": True}

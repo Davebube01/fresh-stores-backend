@@ -18,6 +18,8 @@ from app.services.auth_service import (
 )
 from app.utils.dependencies import get_current_active_superuser
 
+from app.services.activity_service import log_activity
+
 router = APIRouter()
 
 # The admin session is deliberately separate from the customer one: its own
@@ -48,6 +50,8 @@ async def admin_login(
 
     record_login_success(request, ADMIN.name, email)
     access_token = await start_session(db, request, response, user, ADMIN, remember=False)
+    await log_activity(db, user, "admin.signed_in", "admin", "Signed in to the admin",
+                       entity_id=user.id, entity_label=user.full_name or user.email)
     return {"access_token": access_token, "token_type": "bearer"}
 
 

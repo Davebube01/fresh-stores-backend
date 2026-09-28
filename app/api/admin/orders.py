@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.core.pagination import MAX_PAGE_SIZE
 from app.models.order import Order, OrderItem, OrderStatus
 from app.schemas.order import OrderResponse, DispatchUpdate, ConfirmDeliveryRequest, CancelOrderRequest
+from app.services.activity_service import log_activity
 from app.utils.dependencies import get_current_active_superuser
 from app.crud.order import get_order, update_order_status, set_dispatch_info, confirm_delivery, cancel_order
 from app.schemas.admin_orders import AdminOrderRow, OrderView, OrdersSummary
@@ -19,6 +20,14 @@ from app.services.admin_orders_service import (
 )
 
 router = APIRouter()
+
+
+def _ref(order_id: str) -> str:
+    return f"#{order_id[:8].upper()}"
+
+
+def _words(status: str) -> str:
+    return status.replace("_", " ")
 
 @router.get("/", response_model=List[AdminOrderRow])
 async def get_admin_orders(
@@ -109,6 +118,10 @@ async def update_admin_order_status(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail="Order not found"
         )
+    if status != current:
+        await log_activity(db, current_admin, "order.status_changed", "order",
+                           f"Moved order {_ref(id)} from {_words(current)} to {_words(status)}",
+                           entity_id=id, entity_label=_ref(id), changes={"status": {"from": current, "to": status}})
     return order
 
 @router.put("/{id}/cancel", response_model=OrderResponse)
@@ -128,6 +141,8 @@ async def cancel_admin_order(
 
     if not order:
         raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Order not found")
+    await log_activity(db, current_admin, "order.cancelled", "order", f"Cancelled order {_ref(id)}: {payload.reason.strip()}",
+                       entity_id=id, entity_label=_ref(id))
     return order
 
 @router.put("/{id}/confirm-delivery", response_model=OrderResponse)
@@ -157,6 +172,8 @@ async def confirm_admin_order_delivery(
             status_code=http_status.HTTP_404_NOT_FOUND,
             detail="Order not found"
         )
+    await log_activity(db, current_admin, "order.delivered", "order", f"Confirmed delivery of order {_ref(id)} with the PIN",
+                       entity_id=id, entity_label=_ref(id))
     return order
 
 @router.put("/{id}/dispatch", response_model=OrderResponse)
@@ -187,4 +204,7 @@ async def dispatch_admin_order(
     if order and status_value(order) != "in_transit":
         # Handing it to a courier is what puts it on the road.
         order = await update_order_status(db, id, "in_transit")
+    await log_activity(db, current_admin, "order.dispatched", "order",
+                       f"Dispatched order {_ref(id)} with {dispatch.courier_name} ({dispatch.courier_service})",
+                       entity_id=id, entity_label=_ref(id))
     return order

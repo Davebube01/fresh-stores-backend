@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.schemas.walk_in import SalesDay, VoidSaleRequest, WalkInSaleCreate, WalkInSaleRow
 from app.services.walk_in_service import WAT, create_walk_in_sale, get_sale, sales_for_day, void_sale
+from app.services.activity_service import log_activity
 from app.utils.dependencies import get_current_active_superuser
 
 router = APIRouter()
@@ -29,9 +30,14 @@ async def create_sale(
     current_admin=Depends(get_current_active_superuser),
 ):
     try:
-        return await create_walk_in_sale(db, sale, admin_id=current_admin.id)
+        created = await create_walk_in_sale(db, sale, admin_id=current_admin.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    ref = f"#{created['id'][:8].upper()}"
+    await log_activity(db, current_admin, "sale.created", "sale",
+                       f"Rang up sale {ref} for ₦{created['total_amount']:,.0f} ({sale.payment_method})",
+                       entity_id=created["id"], entity_label=ref)
+    return created
 
 
 @router.get("/{sale_id}", response_model=WalkInSaleRow)
@@ -59,4 +65,8 @@ async def void(
         raise HTTPException(status_code=400, detail=str(e))
     if sale is None:
         raise HTTPException(status_code=404, detail="Sale not found")
+    ref = f"#{sale_id[:8].upper()}"
+    await log_activity(db, current_admin, "sale.voided", "sale",
+                       f"Voided sale {ref} (₦{sale['total_amount']:,.0f}): {payload.reason.strip()}",
+                       entity_id=sale_id, entity_label=ref)
     return sale
