@@ -25,6 +25,8 @@ class Product(Base):
     # What one unit of stock costs us (per kg for cuts stocked in kg, per
     # piece for whole goats). Admin-only; null until the admin enters it.
     cost_price = Column(Float, nullable=True)
+    # Alert when stock falls to this or below. Null = the store-wide default.
+    low_stock_threshold = Column(Float, nullable=True)
     is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

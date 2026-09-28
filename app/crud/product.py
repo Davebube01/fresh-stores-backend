@@ -8,6 +8,7 @@ from sqlalchemy import or_, update
 from app.models.product import Product
 from app.models.stock_movement import StockMovement
 from app.schemas.product import ProductCreate, ProductUpdate
+from app.services.stock_alerts import check_stock_alert
 
 async def get_product(db: AsyncSession, product_id: str) -> Optional[Product]:
     result = await db.execute(select(Product).where(Product.id == product_id))
@@ -137,6 +138,7 @@ async def _apply_stock_change(
         note=note,
     )
     db.add(movement)
+    await check_stock_alert(db, product_id, new_quantity - delta, new_quantity)
     return movement
 
 

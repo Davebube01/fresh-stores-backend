@@ -65,6 +65,8 @@ class LowStockProduct(BaseModel):
     slug: str
     image_url: str | None = None
     stock_quantity: float
+    # The threshold in effect for this product.
+    low_stock_threshold: float
 
 
 class TopProduct(BaseModel):
@@ -81,6 +83,7 @@ class TopProduct(BaseModel):
 class DashboardResponse(BaseModel):
     range: DashboardRange
     generated_at: datetime
+    # The store-wide default; products may set their own.
     low_stock_threshold: float
     kpis: DashboardKpis
     revenue_series: list[RevenuePoint]

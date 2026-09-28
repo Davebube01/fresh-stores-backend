@@ -11,10 +11,20 @@ from app.core.database import get_db
 from app.core.pagination import MAX_PAGE_SIZE
 from app.crud.product import create_product, update_product, get_product, get_admin_products, adjust_stock, get_stock_movements
 from app.schemas.product import AdminProductResponse, ProductCreate, ProductUpdate, StockAdjustmentRequest, StockMovementResponse
+from app.services.settings_service import get_low_stock_threshold
+from app.services.stock_alerts import effective_threshold
 from app.utils.dependencies import get_current_active_superuser
 from sqlalchemy.future import select
 
 router = APIRouter()
+
+async def _with_threshold(db: AsyncSession, products):
+    """Set effective_low_stock_threshold (own value, else the store default) for the response."""
+    default = await get_low_stock_threshold(db)
+    for product in products if isinstance(products, list) else [products]:
+        if product is not None:
+            product.effective_low_stock_threshold = effective_threshold(product, default)
+    return products
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # matches the "up to 10MB" copy already shown in the admin UI
 
@@ -55,7 +65,7 @@ async def read_admin_products(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_active_superuser)
 ):
-    return await get_admin_products(db, skip=skip, limit=limit, search=search)
+    return await _with_threshold(db, list(await get_admin_products(db, skip=skip, limit=limit, search=search)))
 
 @router.get("/products/{product_id}", response_model=AdminProductResponse)
 async def read_admin_product(
@@ -66,7 +76,7 @@ async def read_admin_product(
     product = await get_product(db, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    return product
+    return await _with_threshold(db, product)
 
 @router.post("/products", response_model=AdminProductResponse)
 async def create_new_product(
@@ -76,7 +86,7 @@ async def create_new_product(
 ):
     product = await create_product(db, product_in)
     clear_product_caches()
-    return product
+    return await _with_threshold(db, product)
 
 @router.put("/products/{product_id}", response_model=AdminProductResponse)
 async def update_existing_product(
@@ -89,7 +99,7 @@ async def update_existing_product(
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
     clear_product_caches()
-    return product
+    return await _with_threshold(db, product)
 
 @router.post("/products/{product_id}/stock", response_model=AdminProductResponse)
 async def adjust_product_stock(
@@ -114,7 +124,7 @@ async def adjust_product_stock(
         raise HTTPException(status_code=400, detail="Product not found, or adjustment would take stock below zero")
 
     clear_product_caches()
-    return product
+    return await _with_threshold(db, product)
 
 @router.get("/products/{product_id}/stock-movements", response_model=List[StockMovementResponse])
 async def read_product_stock_movements(

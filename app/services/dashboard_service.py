@@ -36,6 +36,7 @@ from app.models.delivery import Delivery
 from app.models.order import Order, OrderItem, OrderStatus
 from app.models.product import Product
 from app.services.settings_service import get_low_stock_threshold
+from app.services.stock_alerts import effective_threshold, threshold_expr
 
 WAT = timezone(timedelta(hours=1))
 
@@ -322,7 +323,7 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
     low_rows = (
         await db.execute(
             select(Product)
-            .where(Product.is_active == True, Product.stock_quantity <= low_stock_threshold)  # noqa: E712
+            .where(Product.is_active == True, Product.stock_quantity <= threshold_expr(low_stock_threshold))  # noqa: E712
             .order_by(Product.stock_quantity.asc(), Product.name.asc())
         )
     ).scalars().all()
@@ -361,7 +362,8 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
         "status_breakdown": status_breakdown,
         "todays_deliveries": todays_deliveries,
         "low_stock": [
-            {"id": p.id, "name": p.name, "slug": p.slug, "image_url": p.image_url, "stock_quantity": float(p.stock_quantity or 0)}
+            {"id": p.id, "name": p.name, "slug": p.slug, "image_url": p.image_url, "stock_quantity": float(p.stock_quantity or 0),
+             "low_stock_threshold": effective_threshold(p, low_stock_threshold)}
             for p in low_rows[:5]
         ],
         "low_stock_count": sum(1 for p in low_rows if (p.stock_quantity or 0) > 0),

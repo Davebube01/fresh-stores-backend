@@ -47,6 +47,8 @@ class ProductCreate(ProductBase):
     stock_quantity: float = Field(default=0.0, ge=0)
     # Cost per unit of stock. Never sent to customers.
     cost_price: float | None = Field(default=None, ge=0)
+    # Null = use the store-wide default.
+    low_stock_threshold: float | None = Field(default=None, ge=0)
 
     @field_validator("weight_options")
     @classmethod
@@ -62,6 +64,7 @@ class ProductUpdate(BaseModel):
     weight_options: list[WeightOption] | None = None
     parts: list[str] | None = None
     cost_price: float | None = Field(default=None, ge=0)
+    low_stock_threshold: float | None = Field(default=None, ge=0)
     # stock_quantity is deliberately absent here — once a product exists,
     # stock only changes through adjust_stock (checkout, cancellation, or
     # the admin "Adjust Stock" action), so every change gets a StockMovement
@@ -84,6 +87,9 @@ class ProductResponse(ProductBase):
 class AdminProductResponse(ProductResponse):
     """ProductResponse plus fields only the admin may see."""
     cost_price: float | None = None
+    # The product's own threshold (null = store default) and the one in effect.
+    low_stock_threshold: float | None = None
+    effective_low_stock_threshold: float | None = None
 
 
 class ProductDetailResponse(BaseModel):

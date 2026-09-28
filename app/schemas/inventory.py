@@ -16,6 +16,7 @@ class InventorySummary(BaseModel):
     stock_cost_value: float
     # active products with no cost price yet (not in stock_cost_value)
     products_without_cost: int
+    # The store-wide default; products may set their own.
     low_stock_threshold: float
 
 
@@ -27,6 +28,8 @@ class RestockItem(BaseModel):
     category: str
     price: float
     stock_quantity: float
+    # The threshold in effect for this product (its own, else the store default).
+    low_stock_threshold: float
     # Units that left through orders in the last 7 days (net of cancellations).
     sold_last_7_days: float
     # Rough runway at that pace; null when nothing sold recently.

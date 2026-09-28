@@ -14,6 +14,7 @@ from app.models.product import Product
 from app.models.stock_movement import StockMovement
 from app.models.user import User
 from app.services.settings_service import get_low_stock_threshold
+from app.services.stock_alerts import effective_threshold
 
 VELOCITY_DAYS = 7
 
@@ -34,8 +35,8 @@ async def get_inventory(
 
     summary = {
         "active_products": len(products),
-        "in_stock": sum(1 for p in products if (p.stock_quantity or 0) > threshold),
-        "low_stock": sum(1 for p in products if 0 < (p.stock_quantity or 0) <= threshold),
+        "in_stock": sum(1 for p in products if (p.stock_quantity or 0) > effective_threshold(p, threshold)),
+        "low_stock": sum(1 for p in products if 0 < (p.stock_quantity or 0) <= effective_threshold(p, threshold)),
         "out_of_stock": sum(1 for p in products if (p.stock_quantity or 0) <= 0),
         "units_on_hand": float(sum(max(p.stock_quantity or 0, 0) for p in products)),
         "stock_value": float(sum(max(p.stock_quantity or 0, 0) * (p.price or 0) for p in products)),
@@ -63,7 +64,8 @@ async def get_inventory(
     needs_restock = []
     for p in products:
         stock = float(p.stock_quantity or 0)
-        if stock > threshold:
+        product_threshold = effective_threshold(p, threshold)
+        if stock > product_threshold:
             continue
         per_day = sold.get(p.id, 0.0) / VELOCITY_DAYS
         needs_restock.append({
@@ -74,6 +76,7 @@ async def get_inventory(
             "category": p.category,
             "price": float(p.price or 0),
             "stock_quantity": stock,
+            "low_stock_threshold": product_threshold,
             "sold_last_7_days": sold.get(p.id, 0.0),
             "days_left": round(max(stock, 0) / per_day, 1) if per_day > 0 else None,
         })
