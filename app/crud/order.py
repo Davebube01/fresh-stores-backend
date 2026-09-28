@@ -104,7 +104,7 @@ async def create_order(db: AsyncSession, order_in: OrderCreate, user_id: Optiona
     await db.refresh(db_order)
     return db_order
 
-async def create_order_item(db: AsyncSession, order_id: str, product_id: str, quantity: int, price_at_time: float, selected_option: Optional[str] = None, stock_units: float = 1.0):
+async def create_order_item(db: AsyncSession, order_id: str, product_id: str, quantity: int, price_at_time: float, selected_option: Optional[str] = None, stock_units: float = 1.0, cost_at_time: Optional[float] = None):
     db_item = OrderItem(
         order_id=order_id,
         product_id=product_id,
@@ -112,6 +112,7 @@ async def create_order_item(db: AsyncSession, order_id: str, product_id: str, qu
         price_at_time=price_at_time,
         selected_option=selected_option,
         stock_units=stock_units,
+        cost_at_time=cost_at_time,
     )
     db.add(db_item)
     await db.commit()

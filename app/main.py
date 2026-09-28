@@ -45,6 +45,9 @@ async def lifespan(app: FastAPI):
     async with AsyncSessionLocal() as session:
         await seed_default_categories(session)
         await seed_admin_user(session)
+        # Seed/load delivery zones for checkout's fee lookup.
+        from app.core.delivery_zones import load_delivery_zones
+        await load_delivery_zones(session)
 
     sweeper = asyncio.create_task(_expire_unpaid_orders_forever())
     yield

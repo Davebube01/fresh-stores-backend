@@ -19,6 +19,7 @@ async def process_checkout(db: AsyncSession, order_in: OrderCreate, user_id: Opt
         nonlocal subtotal
         unit_price, stock_units, display = resolve_line(product, weight_label, part)
         subtotal += unit_price * quantity
+        cost = product.cost_price * stock_units if product.cost_price is not None else None
         product_names[product.id] = product.name
         items_to_create.append({
             "product_id": product.id,
@@ -26,6 +27,7 @@ async def process_checkout(db: AsyncSession, order_in: OrderCreate, user_id: Opt
             "price_at_time": unit_price,
             "selected_option": display,
             "stock_units": stock_units,
+            "cost_at_time": cost,
         })
 
     if order_in.cart_id:

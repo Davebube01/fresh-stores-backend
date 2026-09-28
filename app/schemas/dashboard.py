@@ -13,6 +13,13 @@ class DashboardKpis(BaseModel):
     orders_prev: int
     avg_order_value: float
     avg_order_value_prev: float
+    # Revenue minus cost, over items whose cost is known; null when none are.
+    gross_profit: float | None = None
+    gross_profit_prev: float | None = None
+    # gross_profit / the revenue it covers (0.25 = 25%).
+    profit_margin: float | None = None
+    # Share of revenue with a known cost; below 1 means profit is partial.
+    profit_coverage: float | None = None
     # Paid or being prepared: the admin still has to hand these to a courier
     # (or mark them ready for pickup).
     awaiting_dispatch: int
@@ -67,6 +74,8 @@ class TopProduct(BaseModel):
     image_url: str | None = None
     units: int
     revenue: float
+    # Null when none of this product's sales had a known cost.
+    profit: float | None = None
 
 
 class DashboardResponse(BaseModel):

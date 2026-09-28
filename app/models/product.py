@@ -22,6 +22,9 @@ class Product(Base):
     parts = Column(JSON, nullable=True, default=list) # e.g., ["Leg", "Ribs"]
     
     stock_quantity = Column(Float, default=0.0)
+    # What one unit of stock costs us (per kg for cuts stocked in kg, per
+    # piece for whole goats). Admin-only; null until the admin enters it.
+    cost_price = Column(Float, nullable=True)
     is_active = Column(Boolean, default=True)
     
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

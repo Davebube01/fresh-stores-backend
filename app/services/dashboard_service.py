@@ -12,6 +12,11 @@ Definitions (kept in one place so the cards and the chart always agree):
 - "Today", day buckets and delivery slots use Abuja time (WAT, UTC+1, no DST).
 - The previous period is the same length immediately before the current one,
   so "today" compares against yesterday up to the same time of day.
+- Gross profit = item revenue minus what those items cost us. Each order
+  item's cost is the cost snapshotted at checkout; older items without one
+  use the product's current cost. Items with no cost at all are left out of
+  profit (not counted as free), and `profit_coverage` says what share of
+  revenue profit covers.
 
 Aggregation is done in Python over the orders in the two periods. That is a
 few hundred rows at this store's scale; move it into SQL GROUP BYs if it ever
@@ -26,13 +31,13 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.delivery_zones import DELIVERY_ZONES
+from app.core.delivery_zones import zone_name
 from app.models.delivery import Delivery
 from app.models.order import Order, OrderItem, OrderStatus
 from app.models.product import Product
+from app.services.settings_service import get_low_stock_threshold
 
 WAT = timezone(timedelta(hours=1))
-LOW_STOCK_THRESHOLD = 5.0
 
 RANGE_DAYS = {"today": 1, "7d": 7, "30d": 30}
 # The chart needs more than one point to be useful, so "today" still charts a week.
@@ -59,6 +64,23 @@ def _as_utc(dt: datetime | None) -> datetime | None:
     return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
 
 
+def _item_cost(item: OrderItem) -> float | None:
+    """What one unit of this line cost us, or None if we don't know."""
+    if item.cost_at_time is not None:
+        return float(item.cost_at_time)
+    product = item.product
+    if product is not None and product.cost_price is not None:
+        return float(product.cost_price) * float(item.stock_units or 1)
+    return None
+
+
+def _item_profit(item: OrderItem) -> float | None:
+    cost = _item_cost(item)
+    if cost is None:
+        return None
+    return item.quantity * (float(item.price_at_time or 0) - cost)
+
+
 def _customer_name(order: Order) -> str:
     if order.user is not None:
         return order.user.full_name or order.user.email.split("@")[0]
@@ -67,10 +89,7 @@ def _customer_name(order: Order) -> str:
 
 
 def _zone_name(zone_id: str | None) -> str | None:
-    if not zone_id:
-        return None
-    zone = DELIVERY_ZONES.get(zone_id)
-    return str(zone["name"]) if zone else zone_id
+    return zone_name(zone_id)
 
 
 def _order_row(order: Order) -> dict:
@@ -160,6 +179,8 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
     # --- KPIs + top products ---------------------------------------------
     revenue = revenue_prev = 0.0
     orders = orders_prev = 0
+    profit = profit_prev = 0.0
+    costed_revenue = costed_revenue_prev = 0.0
     by_product: dict[str, dict] = {}
     day_revenue: dict[date, float] = defaultdict(float)
     day_orders: dict[date, int] = defaultdict(int)
@@ -174,6 +195,10 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
             revenue += amount
             orders += 1
             for item in order.items:
+                item_profit = _item_profit(item)
+                if item_profit is not None:
+                    profit += item_profit
+                    costed_revenue += item.quantity * float(item.price_at_time or 0)
                 row = by_product.setdefault(item.product_id, {
                     "product_id": item.product_id,
                     "name": item.product.name if item.product else "Deleted product",
@@ -181,12 +206,20 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
                     "image_url": item.product.image_url if item.product else None,
                     "units": 0,
                     "revenue": 0.0,
+                    "profit": None,
                 })
                 row["units"] += item.quantity
                 row["revenue"] += item.quantity * float(item.price_at_time or 0)
+                if item_profit is not None:
+                    row["profit"] = (row["profit"] or 0.0) + item_profit
         elif prev_start <= paid_at < start:
             revenue_prev += amount
             orders_prev += 1
+            for item in order.items:
+                item_profit = _item_profit(item)
+                if item_profit is not None:
+                    profit_prev += item_profit
+                    costed_revenue_prev += item.quantity * float(item.price_at_time or 0)
 
     revenue_series = []
     for i in range(series_days):
@@ -285,10 +318,11 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
         })
 
     # --- Stock -----------------------------------------------------------
+    low_stock_threshold = await get_low_stock_threshold(db)
     low_rows = (
         await db.execute(
             select(Product)
-            .where(Product.is_active == True, Product.stock_quantity <= LOW_STOCK_THRESHOLD)  # noqa: E712
+            .where(Product.is_active == True, Product.stock_quantity <= low_stock_threshold)  # noqa: E712
             .order_by(Product.stock_quantity.asc(), Product.name.asc())
         )
     ).scalars().all()
@@ -306,7 +340,7 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
     return {
         "range": range_key,
         "generated_at": now,
-        "low_stock_threshold": LOW_STOCK_THRESHOLD,
+        "low_stock_threshold": low_stock_threshold,
         "kpis": {
             "revenue": revenue,
             "revenue_prev": revenue_prev,
@@ -314,6 +348,12 @@ async def get_dashboard(db: AsyncSession, range_key: str, now: datetime | None =
             "orders_prev": orders_prev,
             "avg_order_value": aov,
             "avg_order_value_prev": aov_prev,
+            # Profit figures are null when no sold item had a known cost.
+            "gross_profit": profit if costed_revenue else None,
+            "gross_profit_prev": profit_prev if costed_revenue_prev else None,
+            "profit_margin": profit / costed_revenue if costed_revenue else None,
+            # Share of revenue whose cost is known (1.0 = profit is complete).
+            "profit_coverage": costed_revenue / revenue if revenue else None,
             "awaiting_dispatch": awaiting_dispatch,
             "overdue_dispatch": overdue_dispatch,
         },

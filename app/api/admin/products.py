@@ -10,7 +10,7 @@ from app.core.cache import clear_product_caches
 from app.core.database import get_db
 from app.core.pagination import MAX_PAGE_SIZE
 from app.crud.product import create_product, update_product, get_product, get_admin_products, adjust_stock, get_stock_movements
-from app.schemas.product import ProductCreate, ProductUpdate, ProductResponse, StockAdjustmentRequest, StockMovementResponse
+from app.schemas.product import AdminProductResponse, ProductCreate, ProductUpdate, StockAdjustmentRequest, StockMovementResponse
 from app.utils.dependencies import get_current_active_superuser
 from sqlalchemy.future import select
 
@@ -47,7 +47,7 @@ async def upload_image(
 
     return {"imageUrl": result["secure_url"]}
 
-@router.get("/products", response_model=List[ProductResponse])
+@router.get("/products", response_model=List[AdminProductResponse])
 async def read_admin_products(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=MAX_PAGE_SIZE),
@@ -57,7 +57,7 @@ async def read_admin_products(
 ):
     return await get_admin_products(db, skip=skip, limit=limit, search=search)
 
-@router.get("/products/{product_id}", response_model=ProductResponse)
+@router.get("/products/{product_id}", response_model=AdminProductResponse)
 async def read_admin_product(
     product_id: str,
     db: AsyncSession = Depends(get_db),
@@ -68,7 +68,7 @@ async def read_admin_product(
         raise HTTPException(status_code=404, detail="Product not found")
     return product
 
-@router.post("/products", response_model=ProductResponse)
+@router.post("/products", response_model=AdminProductResponse)
 async def create_new_product(
     product_in: ProductCreate,
     db: AsyncSession = Depends(get_db),
@@ -78,7 +78,7 @@ async def create_new_product(
     clear_product_caches()
     return product
 
-@router.put("/products/{product_id}", response_model=ProductResponse)
+@router.put("/products/{product_id}", response_model=AdminProductResponse)
 async def update_existing_product(
     product_id: str,
     product_in: ProductUpdate,
@@ -91,7 +91,7 @@ async def update_existing_product(
     clear_product_caches()
     return product
 
-@router.post("/products/{product_id}/stock", response_model=ProductResponse)
+@router.post("/products/{product_id}/stock", response_model=AdminProductResponse)
 async def adjust_product_stock(
     product_id: str,
     adjustment: StockAdjustmentRequest,

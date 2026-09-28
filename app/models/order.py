@@ -69,6 +69,10 @@ class OrderItem(Base):
     # Stock used per unit of `quantity` (e.g. 2 for a "2kg" size of a cut
     # stocked in kg), so cancellation gives back exactly what was taken.
     stock_units = Column(Float, default=1.0, nullable=False, server_default="1")
+    # What one unit of `quantity` cost us when ordered (cost_price ×
+    # stock_units), so profit stays right after costs change. Null when the
+    # product had no cost price set.
+    cost_at_time = Column(Float, nullable=True)
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product")
