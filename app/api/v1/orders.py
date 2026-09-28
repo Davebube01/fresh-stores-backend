@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import re
+
 from typing import List, Literal, Optional
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.limiter import limiter
+from app.models.order import Order
 from app.core.pagination import MAX_PAGE_SIZE
 from app.schemas.order import CancelOrderRequest, OrderCreate, OrderResponse, OrderSummary
 from app.crud.order import (
@@ -52,35 +57,53 @@ async def checkout(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@router.get("/track", response_model=OrderResponse)
-async def track_public_order(
-    email: str,
-    order_number: str,
-    db: AsyncSession = Depends(get_db)
-):
-    order = await get_order(db, order_number)
-    if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
-        
-    is_authorized = False
-    
-    # Check registered user
-    if order.user_id:
-        from app.crud.user import get_user
-        user = await get_user(db, order.user_id)
-        if user and user.email.lower() == email.lower():
-            is_authorized = True
-            
-    # Check guest
-    elif order.guest_info:
-        g_info = order.guest_info
-        if isinstance(g_info, dict) and g_info.get("email", "").lower() == email.lower():
-            is_authorized = True
-            
-    if not is_authorized:
-        raise HTTPException(status_code=404, detail="Order not found or invalid credentials")
+# Guests look orders up by number + email, so keep guessing slow.
+TRACK_LIMIT = "20/minute"
 
-    return await expire_if_overdue(db, order)
+
+def _order_email(order: Order, user_email: Optional[str]) -> str:
+    if order.user_id:
+        return (user_email or "").lower()
+    info = order.guest_info if isinstance(order.guest_info, dict) else {}
+    return str(info.get("email", "")).lower()
+
+
+@router.get("/track", response_model=OrderResponse)
+@limiter.limit(TRACK_LIMIT)
+async def track_public_order(
+    request: Request,
+    email: str = Query(..., max_length=254),
+    order_number: str = Query(..., max_length=64),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Public order lookup for guests: the order number plus the email it was
+    placed with. Accepts the full order ID or the short number customers see
+    (e.g. "#1A2B3C4D", the first 8 characters). Every mismatch answers the
+    same 404, so it doesn't reveal which orders exist.
+    """
+    not_found = HTTPException(status_code=404, detail="Order not found or invalid credentials")
+    number = order_number.strip().lstrip("#").lower()
+    email = email.strip().lower()
+    # Hex and hyphens only: also keeps LIKE wildcards (% _) out of the prefix match.
+    if len(number) < 8 or not email or not re.fullmatch(r"[0-9a-f-]+", number):
+        raise not_found
+
+    rows = (await db.execute(
+        select(Order.id, User.email)
+        .outerjoin(User, User.id == Order.user_id)
+        .where(Order.id.like(f"{number}%") if len(number) < 36 else Order.id == number)
+        .limit(20)
+    )).all()
+    matches = []
+    for order_id, user_email in rows:
+        order = await get_order(db, order_id)
+        if order and _order_email(order, user_email) == email:
+            matches.append(order)
+    # A short number shared by two of this person's orders is ambiguous.
+    if len(matches) != 1:
+        raise not_found
+    return await expire_if_overdue(db, matches[0])
 
 @router.get("/{order_id}", response_model=OrderResponse)
 async def get_order_by_id(

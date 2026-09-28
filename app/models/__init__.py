@@ -9,3 +9,4 @@ from app.models.refresh_token import RefreshToken
 from app.models.settings import StoreSettings, DeliveryZone
 from app.models.notification import AdminNotification
 from app.models.activity import ActivityLog
+from app.models.address import SavedAddress

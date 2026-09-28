@@ -45,6 +45,7 @@ async def seed_admin_user(db: AsyncSession):
             full_name="System Administrator",
             is_active=True,
             is_superuser=True,
+            staff_role="owner",
             email_verified=True,
         )
         db.add(db_user)

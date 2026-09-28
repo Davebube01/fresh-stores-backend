@@ -7,7 +7,8 @@ from app.core.limiter import limiter
 from app.core.security import burn_password_check, verify_password
 from app.core.throttle import enforce_login_allowed, record_login_failure, record_login_success
 from app.crud.user import get_user_by_email
-from app.schemas.user import AuthResponse, Token, UserLogin, UserResponse
+from app.schemas.staff import AdminAuthResponse, AdminUserResponse, PasswordChange
+from app.schemas.user import Token, UserLogin
 from app.services.auth_service import (
     ADMIN,
     clear_refresh_cookie,
@@ -19,6 +20,7 @@ from app.services.auth_service import (
 from app.utils.dependencies import get_current_active_superuser
 
 from app.services.activity_service import log_activity
+from app.services.staff_service import change_own_password
 
 router = APIRouter()
 
@@ -55,14 +57,14 @@ async def admin_login(
     return {"access_token": access_token, "token_type": "bearer"}
 
 
-@router.post("/refresh", response_model=AuthResponse)
+@router.post("/refresh", response_model=AdminAuthResponse)
 @limiter.limit("60/minute")
 async def admin_refresh(request: Request, response: Response, db: AsyncSession = Depends(get_db)):
     result = await refresh_session(db, request, response, ADMIN)
     if result is None:
         return no_session_response(ADMIN)
     access_token, user = result
-    return AuthResponse(access_token=access_token, token_type="bearer", user=user)
+    return AdminAuthResponse(access_token=access_token, token_type="bearer", user=AdminUserResponse.model_validate(user))
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -73,6 +75,24 @@ async def admin_logout(request: Request, db: AsyncSession = Depends(get_db)):
     return response
 
 
-@router.get("/me", response_model=UserResponse)
+@router.get("/me", response_model=AdminUserResponse)
 async def get_admin_me(current_admin = Depends(get_current_active_superuser)):
     return current_admin
+
+
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("10/hour")
+async def change_admin_password(
+    request: Request,
+    data: PasswordChange,
+    db: AsyncSession = Depends(get_db),
+    current_admin = Depends(get_current_active_superuser),
+):
+    """Any staff member can change their own password (e.g. the one the owner gave them)."""
+    if not verify_password(data.current_password, current_admin.hashed_password):
+        raise HTTPException(status_code=400, detail="Your current password is incorrect")
+    if data.current_password == data.new_password:
+        raise HTTPException(status_code=400, detail="Choose a password different from your current one")
+    await change_own_password(db, current_admin, data.new_password)
+    await log_activity(db, current_admin, "staff.password_changed", "staff", "Changed their own password",
+                       entity_id=current_admin.id, entity_label=current_admin.full_name or current_admin.email)

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_validator
 from datetime import datetime
 from app.core.product_options import normalize_weight_options
 
@@ -90,6 +90,15 @@ class AdminProductResponse(ProductResponse):
     # The product's own threshold (null = store default) and the one in effect.
     low_stock_threshold: float | None = None
     effective_low_stock_threshold: float | None = None
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _hide_cost(cls, data, handler):
+        # Roles without "costs.view" (e.g. cashiers) get no cost price.
+        result = handler(data)
+        if getattr(data, "hidden_cost", False):
+            result.cost_price = None
+        return result
 
 
 class ProductDetailResponse(BaseModel):

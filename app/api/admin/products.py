@@ -12,6 +12,7 @@ from app.core.pagination import MAX_PAGE_SIZE
 from app.crud.product import create_product, update_product, get_product, get_admin_products, adjust_stock, get_stock_movements
 from app.schemas.product import AdminProductResponse, ProductCreate, ProductUpdate, StockAdjustmentRequest, StockMovementResponse
 from app.core.product_options import normalize_weight_options
+from app.core.permissions import can
 from app.services.activity_service import diff, log_activity, snapshot
 from app.services.settings_service import get_low_stock_threshold
 from app.services.stock_alerts import effective_threshold
@@ -33,12 +34,15 @@ def _product_snapshot(product) -> dict:
     values["weight_options"] = normalize_weight_options(values["weight_options"], product.price)
     return values
 
-async def _with_threshold(db: AsyncSession, products):
+async def _with_threshold(db: AsyncSession, products, viewer=None):
     """Set effective_low_stock_threshold (own value, else the store default) for the response."""
     default = await get_low_stock_threshold(db)
     for product in products if isinstance(products, list) else [products]:
         if product is not None:
             product.effective_low_stock_threshold = effective_threshold(product, default)
+            if viewer is not None and not can(viewer, "costs.view"):
+                # Response-only attribute: hides the cost without touching the row.
+                product.hidden_cost = True
     return products
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # matches the "up to 10MB" copy already shown in the admin UI
@@ -80,7 +84,7 @@ async def read_admin_products(
     db: AsyncSession = Depends(get_db),
     current_user = Depends(get_current_active_superuser)
 ):
-    return await _with_threshold(db, list(await get_admin_products(db, skip=skip, limit=limit, search=search)))
+    return await _with_threshold(db, list(await get_admin_products(db, skip=skip, limit=limit, search=search)), current_user)
 
 @router.get("/products/{product_id}", response_model=AdminProductResponse)
 async def read_admin_product(
@@ -91,7 +95,7 @@ async def read_admin_product(
     product = await get_product(db, product_id)
     if product is None:
         raise HTTPException(status_code=404, detail="Product not found")
-    return await _with_threshold(db, product)
+    return await _with_threshold(db, product, current_user)
 
 @router.post("/products", response_model=AdminProductResponse)
 async def create_new_product(
@@ -103,7 +107,7 @@ async def create_new_product(
     clear_product_caches()
     await log_activity(db, current_user, "product.created", "product", f"Added product {product.name}",
                        entity_id=product.id, entity_label=product.name)
-    return await _with_threshold(db, await get_product(db, product.id))
+    return await _with_threshold(db, await get_product(db, product.id), current_user)
 
 @router.put("/products/{product_id}", response_model=AdminProductResponse)
 async def update_existing_product(
@@ -123,7 +127,7 @@ async def update_existing_product(
         fields = ", ".join(FIELD_NAMES.get(f, f) for f in changes)
         await log_activity(db, current_user, "product.updated", "product", f"Updated {product.name}: {fields}",
                            entity_id=product.id, entity_label=product.name, changes=changes)
-    return await _with_threshold(db, await get_product(db, product_id))
+    return await _with_threshold(db, await get_product(db, product_id), current_user)
 
 @router.post("/products/{product_id}/stock", response_model=AdminProductResponse)
 async def adjust_product_stock(
@@ -156,7 +160,7 @@ async def adjust_product_stock(
         entity_id=product.id, entity_label=product.name,
         changes={"stock": {"from": product.stock_quantity - change, "to": product.stock_quantity}},
     )
-    return await _with_threshold(db, await get_product(db, product_id))
+    return await _with_threshold(db, await get_product(db, product_id), current_user)
 
 @router.get("/products/{product_id}/stock-movements", response_model=List[StockMovementResponse])
 async def read_product_stock_movements(

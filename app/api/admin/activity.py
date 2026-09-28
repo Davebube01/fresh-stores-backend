@@ -12,7 +12,7 @@ from app.utils.dependencies import get_current_active_superuser
 
 router = APIRouter()
 
-EntityType = Literal["product", "category", "order", "sale", "settings", "admin"]
+EntityType = Literal["product", "category", "order", "sale", "settings", "staff", "admin"]
 
 
 @router.get("", response_model=ActivityPage)

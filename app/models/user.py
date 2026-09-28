@@ -18,6 +18,9 @@ class User(Base):
     avatar_url = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
     is_superuser = Column(Boolean, default=False)
+    # For admin (is_superuser) accounts: "owner" | "manager" | "cashier".
+    # See app/core/permissions.py. Null on an admin account means owner.
+    staff_role = Column(String, nullable=True)
     # Set once the user proves they own the address (link in the verification
     # email). Guest orders are only attached to an account after this.
     email_verified = Column(Boolean, nullable=False, default=False, server_default=false())
