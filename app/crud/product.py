@@ -39,8 +39,14 @@ async def get_admin_products(db: AsyncSession, skip: int = 0, limit: int = 100, 
     result = await db.execute(query)
     return result.scalars().all()
 
+def _from_price(weight_options: list[dict]) -> Optional[float]:
+    """A product with sizes is listed at its cheapest one ("from ₦X")."""
+    return min(o["price"] for o in weight_options) if weight_options else None
+
 async def create_product(db: AsyncSession, product: ProductCreate) -> Product:
-    db_product = Product(**product.model_dump())
+    data = product.model_dump()
+    data["price"] = _from_price(data["weight_options"]) or data["price"]
+    db_product = Product(**data)
     db.add(db_product)
     await db.commit()
     await db.refresh(db_product)
@@ -61,6 +67,8 @@ async def update_product(db: AsyncSession, product_id: str, product_update: Prod
     db_product = await get_product(db, product_id)
     if db_product:
         update_data = product_update.model_dump(exclude_unset=True)
+        if update_data.get("weight_options"):
+            update_data["price"] = _from_price(update_data["weight_options"])
         for key, value in update_data.items():
             setattr(db_product, key, value)
         await db.commit()
@@ -118,7 +126,7 @@ async def _apply_stock_change(
     return movement
 
 
-async def decrement_stock(db: AsyncSession, product_id: str, quantity: int, *, order_id: str) -> bool:
+async def decrement_stock(db: AsyncSession, product_id: str, quantity: float, *, order_id: str) -> bool:
     """
     Reserve stock for a newly placed order, refusing if there isn't enough.
     Does NOT commit; the caller controls the transaction so a failed item
@@ -130,7 +138,7 @@ async def decrement_stock(db: AsyncSession, product_id: str, quantity: int, *, o
     return movement is not None
 
 
-async def restore_stock(db: AsyncSession, product_id: str, quantity: int, *, order_id: str) -> None:
+async def restore_stock(db: AsyncSession, product_id: str, quantity: float, *, order_id: str) -> None:
     """Give stock back (order cancelled after it was reserved). Does not commit."""
     await _apply_stock_change(db, product_id, quantity, reason="order_cancelled", order_id=order_id)
 

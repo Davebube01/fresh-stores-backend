@@ -1,11 +1,11 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List
 from datetime import datetime
 from app.schemas.product import ProductResponse
 
 class CartItemBase(BaseModel):
     product_id: str
-    quantity: int = 1
+    quantity: int = Field(default=1, ge=1, le=100)
     selected_option: str | None = None
 
 class CartItemCreate(CartItemBase):

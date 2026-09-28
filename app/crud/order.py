@@ -104,13 +104,14 @@ async def create_order(db: AsyncSession, order_in: OrderCreate, user_id: Optiona
     await db.refresh(db_order)
     return db_order
 
-async def create_order_item(db: AsyncSession, order_id: str, product_id: str, quantity: int, price_at_time: float, selected_option: Optional[str] = None):
+async def create_order_item(db: AsyncSession, order_id: str, product_id: str, quantity: int, price_at_time: float, selected_option: Optional[str] = None, stock_units: float = 1.0):
     db_item = OrderItem(
         order_id=order_id,
         product_id=product_id,
         quantity=quantity,
         price_at_time=price_at_time,
-        selected_option=selected_option
+        selected_option=selected_option,
+        stock_units=stock_units,
     )
     db.add(db_item)
     await db.commit()
@@ -206,7 +207,7 @@ async def cancel_order(
         raise ValueError("This order's status just changed, so it can't be cancelled here.")
 
     for item in db_order.items:
-        await restore_stock(db, item.product_id, item.quantity, order_id=order_id)
+        await restore_stock(db, item.product_id, item.quantity * (item.stock_units or 1), order_id=order_id)
     await db.commit()
     clear_product_caches()
 

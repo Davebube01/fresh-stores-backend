@@ -66,6 +66,9 @@ class OrderItem(Base):
     quantity = Column(Integer, default=1, nullable=False)
     selected_option = Column(String, nullable=True)
     price_at_time = Column(Float, nullable=False) # Important for historical records
+    # Stock used per unit of `quantity` (e.g. 2 for a "2kg" size of a cut
+    # stocked in kg), so cancellation gives back exactly what was taken.
+    stock_units = Column(Float, default=1.0, nullable=False, server_default="1")
 
     order = relationship("Order", back_populates="items")
     product = relationship("Product")

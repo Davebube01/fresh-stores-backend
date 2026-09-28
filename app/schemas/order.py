@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from app.core.payment_window import payment_deadline
 from typing import List, Any
 from datetime import datetime
@@ -6,13 +6,26 @@ from app.schemas.product import ProductResponse
 
 class OrderItemCreate(BaseModel):
     product_id: str
+    quantity: int = Field(ge=1, le=100)
+    # The chosen size label and cut. Price and stock are looked up from the
+    # product by these — never taken from the client.
+    weight_option: str | None = None
+    part: str | None = None
+    # Legacy combined label ("2kg · Hind leg"), still accepted from carts
+    # saved before weight_option/part were sent separately.
+    selected_option: str | None = None
+    # Ignored; the server prices every line itself. Kept so older clients
+    # that still send it aren't rejected.
+    price_at_time: float | None = None
+
+class OrderItemResponse(BaseModel):
+    id: str
+    order_id: str
+    product_id: str
     quantity: int
     selected_option: str | None = None
     price_at_time: float
-
-class OrderItemResponse(OrderItemCreate):
-    id: str
-    order_id: str
+    stock_units: float = 1.0
     product: ProductResponse
     
     model_config = ConfigDict(from_attributes=True)

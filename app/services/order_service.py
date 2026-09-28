@@ -6,6 +6,7 @@ from app.core.cache import clear_product_caches
 from app.core.delivery_zones import get_zone_fee
 from app.crud.order import create_order, create_order_item, create_delivery
 from app.crud.cart import get_cart
+from app.core.product_options import resolve_line, split_selected_option
 from app.schemas.order import OrderCreate
 
 async def process_checkout(db: AsyncSession, order_in: OrderCreate, user_id: Optional[str] = None):
@@ -14,6 +15,19 @@ async def process_checkout(db: AsyncSession, order_in: OrderCreate, user_id: Opt
     items_to_create = []
     product_names: dict[str, str] = {}
 
+    def add_line(product, quantity: int, weight_label, part):
+        nonlocal subtotal
+        unit_price, stock_units, display = resolve_line(product, weight_label, part)
+        subtotal += unit_price * quantity
+        product_names[product.id] = product.name
+        items_to_create.append({
+            "product_id": product.id,
+            "quantity": quantity,
+            "price_at_time": unit_price,
+            "selected_option": display,
+            "stock_units": stock_units,
+        })
+
     if order_in.cart_id:
         # Checkout from cart
         cart = await get_cart(db, order_in.cart_id)
@@ -21,29 +35,21 @@ async def process_checkout(db: AsyncSession, order_in: OrderCreate, user_id: Opt
             raise ValueError("Cart is empty or not found")
 
         for item in cart.items:
-            subtotal += item.product.price * item.quantity
-            product_names[item.product_id] = item.product.name
-            items_to_create.append({
-                "product_id": item.product_id,
-                "quantity": item.quantity,
-                "price_at_time": item.product.price,
-                "selected_option": item.selected_option
-            })
+            if not item.product.is_active:
+                raise ValueError(f"{item.product.name} is no longer available")
+            weight_label, part = split_selected_option(item.product, item.selected_option)
+            add_line(item.product, item.quantity, weight_label, part)
     elif order_in.items:
         # Checkout directly with items
         from app.crud.product import get_product
         for item in order_in.items:
             product = await get_product(db, item.product_id)
-            if not product:
-                raise ValueError(f"Product {item.product_id} not found")
-            subtotal += product.price * item.quantity
-            product_names[item.product_id] = product.name
-            items_to_create.append({
-                "product_id": item.product_id,
-                "quantity": item.quantity,
-                "price_at_time": product.price,
-                "selected_option": item.selected_option
-            })
+            if not product or not product.is_active:
+                raise ValueError("One of the products in your cart is no longer available")
+            weight_label, part = item.weight_option, item.part
+            if weight_label is None and part is None:
+                weight_label, part = split_selected_option(product, item.selected_option)
+            add_line(product, item.quantity, weight_label, part)
     else:
         raise ValueError("No items provided for checkout")
 
@@ -77,7 +83,8 @@ async def process_checkout(db: AsyncSession, order_in: OrderCreate, user_id: Opt
     # items already decremented in this same loop.
     from app.crud.product import decrement_stock
     for item_data in items_to_create:
-        reserved = await decrement_stock(db, item_data["product_id"], item_data["quantity"], order_id=order.id)
+        needed = item_data["quantity"] * item_data["stock_units"]
+        reserved = await decrement_stock(db, item_data["product_id"], needed, order_id=order.id)
         if not reserved:
             await db.rollback()
             # The order row itself was already committed above (before we

@@ -1,5 +1,27 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 from datetime import datetime
+from app.core.product_options import normalize_weight_options
+
+
+class WeightOption(BaseModel):
+    """One size a product is sold in, with its own price and stock usage."""
+    label: str = Field(min_length=1, max_length=40)
+    price: float = Field(ge=0)
+    # How much of the product's stock_quantity one of these uses up, in the
+    # product's stock unit (e.g. 2 for "2kg" of a cut stocked in kg).
+    stock_units: float = Field(gt=0)
+
+
+def _check_options(options: list[WeightOption] | None) -> list[WeightOption] | None:
+    """Rules for options an admin is saving (reads tolerate older data)."""
+    if options:
+        if any(o.price <= 0 for o in options):
+            raise ValueError("Every size needs a price above zero")
+        labels = [o.label.strip().lower() for o in options]
+        if len(labels) != len(set(labels)):
+            raise ValueError("Each size needs a different label")
+    return options
+
 
 class ProductBase(BaseModel):
     name: str
@@ -8,27 +30,45 @@ class ProductBase(BaseModel):
     description: str | None = None
     image_url: str | None = None
     category: str
-    weight_options: list[str] = []
+    weight_options: list[WeightOption] = []
     parts: list[str] = []
     stock_quantity: float = 0.0
     is_active: bool = True
 
+    @field_validator("weight_options", mode="before")
+    @classmethod
+    def _upgrade_legacy_options(cls, value, info: ValidationInfo):
+        # Rows saved before sizes had prices hold bare labels; price them
+        # from the product's base price so reads and checkout stay consistent.
+        return normalize_weight_options(value, info.data.get("price") or 0)
+
 class ProductCreate(ProductBase):
-    pass
+    price: float = Field(gt=0)
+    stock_quantity: float = Field(default=0.0, ge=0)
+
+    @field_validator("weight_options")
+    @classmethod
+    def _validate_options(cls, value):
+        return _check_options(value)
 
 class ProductUpdate(BaseModel):
     name: str | None = None
-    price: float | None = None
+    price: float | None = Field(default=None, gt=0)
     description: str | None = None
     image_url: str | None = None
     category: str | None = None
-    weight_options: list[str] | None = None
+    weight_options: list[WeightOption] | None = None
     parts: list[str] | None = None
     # stock_quantity is deliberately absent here — once a product exists,
     # stock only changes through adjust_stock (checkout, cancellation, or
     # the admin "Adjust Stock" action), so every change gets a StockMovement
     # row. Initial stock is still set via ProductCreate.
     is_active: bool | None = None
+
+    @field_validator("weight_options")
+    @classmethod
+    def _validate_options(cls, value):
+        return _check_options(value)
 
 class ProductResponse(ProductBase):
     id: str
