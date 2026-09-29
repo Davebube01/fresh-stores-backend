@@ -143,6 +143,19 @@ def test_production_refuses_weak_admin_password(password):
     Settings(ENV="production", SECRET_KEY="x" * 40, ADMIN_PASSWORD="", _env_file=None)  # empty = not set
 
 
+# --- ALLOWED_ORIGINS as typed into a hosting dashboard -------------------------
+
+@pytest.mark.parametrize("raw, expected", [
+    ("https://everything-fresh.netlify.app", ["https://everything-fresh.netlify.app"]),
+    ("https://a.app/, https://b.app", ["https://a.app", "https://b.app"]),
+    ('["https://a.app", "https://b.app/"]', ["https://a.app", "https://b.app"]),
+])
+def test_allowed_origins_from_environment(monkeypatch, raw, expected):
+    # Read from a real environment variable: that's where the JSON pre-parsing bit.
+    monkeypatch.setenv("ALLOWED_ORIGINS", raw)
+    assert Settings(_env_file=None).ALLOWED_ORIGINS == expected
+
+
 # --- Hosted Postgres URLs pasted as-is ------------------------------------------
 
 @pytest.mark.parametrize("pasted, expected", [

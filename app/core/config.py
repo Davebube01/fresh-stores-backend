@@ -1,6 +1,7 @@
-from typing import Any
+import json
+from typing import Annotated, Any
 from pydantic import field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 INSECURE_DEFAULT_SECRET_KEYS = {
     "super-secret-key-change-in-production",
@@ -46,16 +47,20 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "sqlite+aiosqlite:///./sql_app.db"
     # Explicit origins (no "*"): cookies are sent with credentials, which the
     # CORS spec forbids combining with a wildcard.
-    ALLOWED_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3001"]
+    # NoDecode: pydantic-settings would otherwise JSON-parse the env var before
+    # the validator below runs, and crash on a plain "https://shop.app".
+    ALLOWED_ORIGINS: Annotated[list[str], NoDecode] = ["http://localhost:3000", "http://localhost:3001"]
 
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
-    def assemble_cors_origins(cls, v: Any) -> list[str] | str:
-        if isinstance(v, str) and not v.startswith("["):
-            return [i.strip() for i in v.split(",")]
-        elif isinstance(v, (list, str)):
-            return v
-        return v
+    def assemble_cors_origins(cls, v: Any) -> list[str]:
+        """Accepts one origin, a comma-separated list, or a JSON list."""
+        if isinstance(v, str):
+            v = v.strip()
+            v = json.loads(v) if v.startswith("[") else v.split(",")
+        # Browsers send the origin without a trailing slash, so
+        # "https://shop.app/" would never match; drop it (and blanks).
+        return [str(o).strip().rstrip("/") for o in v if str(o).strip()]
     
     # First owner account, created at startup only while no admin exists.
     ADMIN_EMAIL: str | None = None
