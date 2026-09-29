@@ -79,3 +79,7 @@ class ResetPasswordRequest(BaseModel):
     @classmethod
     def _new(cls, v: str) -> str:
         return _validate_password(v)
+
+
+class DeleteAccountRequest(BaseModel):
+    password: str = Field(max_length=200)

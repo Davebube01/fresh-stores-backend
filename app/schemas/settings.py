@@ -20,13 +20,15 @@ class StoreDetails(BaseModel):
     address: str | None = Field(default=None, max_length=200)
     pickup_address: str | None = Field(default=None, max_length=200)
     pickup_instructions: str | None = Field(default=None, max_length=500)
+    about_headline: str | None = Field(default=None, max_length=120)
+    about_story: str | None = Field(default=None, max_length=4000)
     low_stock_threshold: float = Field(default=5, ge=0, le=10000)
 
     model_config = ConfigDict(from_attributes=True)
 
     @field_validator(
         "contact_email", "contact_phone", "whatsapp_number", "address",
-        "pickup_address", "pickup_instructions", mode="before",
+        "pickup_address", "pickup_instructions", "about_headline", "about_story", mode="before",
     )
     @classmethod
     def _blank(cls, v):
@@ -47,6 +49,8 @@ class PublicStoreInfo(BaseModel):
     address: str | None = None
     pickup_address: str | None = None
     pickup_instructions: str | None = None
+    about_headline: str | None = None
+    about_story: str | None = None
 
 
 class DeliveryZoneOut(BaseModel):

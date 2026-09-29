@@ -98,3 +98,48 @@ async def send_password_reset_email(email: str, full_name: str | None, reset_url
     ========================================================
     """
     logger.info(f"Delivering password reset email to {email}:\n{email_body}")
+
+
+async def send_account_deleted_email(email: str, full_name: str | None) -> None:
+    """Simulated like the others: logs the message to the backend console."""
+    greeting = f"Hi {full_name}," if full_name else "Hi,"
+    email_body = f"""
+    ========================================================
+    To: {email}
+    Subject: Your account has been deleted - Everything Fresh
+    ========================================================
+    {greeting}
+
+    Your Everything Fresh account has been deleted, as you asked.
+    We've removed your personal details and saved addresses. We keep
+    a record of past orders, without your details, because the law
+    requires us to keep sales records.
+
+    You're welcome to order as a guest or create a new account any
+    time. If you didn't do this, please contact us straight away.
+
+    The Everything Fresh team
+    ========================================================
+    """
+    logger.info(f"Delivering account deleted email to {email}:\n{email_body}")
+
+
+async def send_contact_reply_email(email: str, name: str, reply: str, original: str, store_name: str) -> None:
+    """Simulated like the others: logs the message to the backend console."""
+    quoted = "\n".join(f"    > {line}" for line in original.splitlines())
+    email_body = f"""
+    ========================================================
+    To: {email}
+    Subject: Re: your message to {store_name}
+    ========================================================
+    Hi {name.split()[0] if name.strip() else "there"},
+
+{reply}
+
+    {store_name}
+
+    You wrote:
+{quoted}
+    ========================================================
+    """
+    logger.info(f"Delivering contact reply to {email}:\n{email_body}")

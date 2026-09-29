@@ -33,11 +33,15 @@ async def _expire_unpaid_orders_forever():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Auto-create all DB tables on startup (dev convenience, use Alembic in production)
-    from app.core.database import engine, Base
-    import app.models  # noqa: ensure all models are registered
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    # Production schema changes go through `python -m app.db_migrate` (run by
+    # the Docker image before the app starts). Creating missing tables here is
+    # only a convenience for local runs, and would hide a forgotten migration
+    # in production.
+    if settings.ENV != "production":
+        from app.core.database import engine, Base
+        import app.models  # noqa: ensure all models are registered
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
     # Seed default categories
     from app.core.database import AsyncSessionLocal
     from app.crud.category import seed_default_categories

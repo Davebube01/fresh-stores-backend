@@ -1,5 +1,6 @@
 """Customer self-service endpoints (signed in)."""
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -8,15 +9,16 @@ from app.core.limiter import limiter
 from app.models.user import User
 from app.core.config import settings
 from app.core.throttle import hit_limit
-from app.schemas.account import AddressIn, AddressOut, ForgotPasswordRequest, PasswordChange, ProfileUpdate, ResetPasswordRequest
+from app.schemas.account import AddressIn, AddressOut, DeleteAccountRequest, ForgotPasswordRequest, PasswordChange, ProfileUpdate, ResetPasswordRequest
 from app.core.security import create_email_token
-from app.services.email_service import send_password_reset_email, send_verification_email
+from app.services.email_service import send_account_deleted_email, send_password_reset_email, send_verification_email
 from app.schemas.user import UserResponse
 from app.services.account_service import (
-    AccountError, RESET_MINUTES, add_address, address_out, change_password, create_reset_token, delete_address,
+    AccountError, RESET_MINUTES, add_address, delete_account, address_out, change_password, create_reset_token, delete_address,
     list_addresses, reset_password,
     set_default, sign_out_other_sessions, update_address, update_profile,
 )
+from app.services.auth_service import CUSTOMER, clear_refresh_cookie
 from app.utils.dependencies import get_current_active_user
 
 # /api/v1/account/...
@@ -133,3 +135,24 @@ async def post_resend_verification_public(
         url = f"{settings.FRONTEND_URL}/verify-email?token={token}"
         background_tasks.add_task(send_verification_email, user.email, user.full_name, url)
     return {"sent": True}
+
+
+@session_router.post("/delete-account")
+@limiter.limit("5/hour")
+async def post_delete_account(
+    request: Request,
+    body: DeleteAccountRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_active_user),
+):
+    """Delete the signed-in customer's account (needs their password). Signs them out everywhere."""
+    name = user.full_name
+    try:
+        email = await delete_account(db, user, body.password)
+    except AccountError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    background_tasks.add_task(send_account_deleted_email, email, name)
+    response = JSONResponse({"deleted": True}, background=background_tasks)
+    clear_refresh_cookie(response, CUSTOMER)
+    return response

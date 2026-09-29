@@ -8,6 +8,9 @@ INSECURE_DEFAULT_SECRET_KEYS = {
     "secret",
 }
 
+# Passwords that must never guard a real admin account.
+INSECURE_ADMIN_PASSWORDS = {"adminpassword123", "admin", "password", "password123", "changeme"}
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Goat Meat Store API"
     VERSION: str = "1.0.0"
@@ -54,6 +57,11 @@ class Settings(BaseSettings):
             return v
         return v
     
+    # First owner account, created at startup only while no admin exists.
+    ADMIN_EMAIL: str | None = None
+    ADMIN_PASSWORD: str | None = None
+    ADMIN_NAME: str = "Store Owner"
+
     PAYSTACK_SECRET_KEY: str | None = None
     PAYSTACK_PUBLIC_KEY: str | None = None
 
@@ -69,13 +77,31 @@ class Settings(BaseSettings):
 
     @property
     def async_database_url(self) -> str:
-        """Handle Render's postgres:// vs sqlalchemy's postgresql+asyncpg://"""
+        """
+        DATABASE_URL as the asyncpg driver needs it, so a provider's URL can be
+        pasted as-is: Render's postgres:// scheme, and Neon/Supabase-style
+        `?sslmode=require&channel_binding=require`, which asyncpg rejects
+        (it takes `ssl=` instead and negotiates channel binding itself).
+        """
         url = self.DATABASE_URL
         if url.startswith("postgres://"):
             url = url.replace("postgres://", "postgresql+asyncpg://", 1)
         elif url.startswith("postgresql://"):
             url = url.replace("postgresql://", "postgresql+asyncpg://", 1)
-        return url
+        if not url.startswith("postgresql+asyncpg://") or "?" not in url:
+            return url
+
+        base, query = url.split("?", 1)
+        params = []
+        for pair in query.split("&"):
+            key, _, value = pair.partition("=")
+            if key == "channel_binding":
+                continue
+            if key == "sslmode":
+                # disable/allow/prefer/require/verify-ca/verify-full all mean the same to asyncpg's ssl=.
+                key = "ssl"
+            params.append(f"{key}={value}" if _ else key)
+        return f"{base}?{'&'.join(params)}" if params else base
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -88,6 +114,10 @@ class Settings(BaseSettings):
                 "SECRET_KEY must be set to a strong, unique value (32+ characters) when ENV=production. "
                 'Generate one with: python -c "import secrets; print(secrets.token_urlsafe(32))"'
             )
+        if self.ENV == "production" and self.ADMIN_PASSWORD and (
+            len(self.ADMIN_PASSWORD) < 12 or self.ADMIN_PASSWORD.lower() in INSECURE_ADMIN_PASSWORDS
+        ):
+            raise ValueError("ADMIN_PASSWORD must be a strong password (12+ characters) when ENV=production.")
         if self.ENV == "production" and "*" in self.ALLOWED_ORIGINS:
             raise ValueError("ALLOWED_ORIGINS must list explicit origins (not '*') when ENV=production.")
         return self

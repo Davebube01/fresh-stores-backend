@@ -17,4 +17,5 @@ RUN mkdir -p uploads
 
 EXPOSE 8000
 
-CMD ["python", "main.py"]
+# Bring the schema up to date first (creates it on an empty database).
+CMD ["sh", "-c", "python -m app.db_migrate && python main.py"]

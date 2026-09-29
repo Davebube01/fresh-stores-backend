@@ -110,43 +110,48 @@ async def initialize_payment(
     )
 
 
+def verify_paystack_signature(raw_body: bytes, signature: str | None) -> bool:
+    """Paystack signs every webhook with HMAC-SHA512 of the raw body, keyed by our secret key."""
+    if not settings.PAYSTACK_SECRET_KEY or not signature:
+        return False
+    expected = hmac.new(settings.PAYSTACK_SECRET_KEY.encode("utf-8"), raw_body, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(expected, signature)
+
+
+def simulator_allowed() -> bool:
+    """
+    The dev-only "pretend Paystack paid" shortcut. Never in production, and
+    never with a live key, so a server whose ENV was left unset can't be
+    talked into marking real orders paid.
+    """
+    return settings.ENV != "production" and not (settings.PAYSTACK_SECRET_KEY or "").startswith("sk_live_")
+
+
 @router.post("/webhook")
 async def paystack_webhook(
     request: Request,
     webhook_data: PaymentWebhook,
     x_paystack_signature: str | None = Header(None, alias="x-paystack-signature"),
-    x_simulated: str | None = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Webhook endpoint called by Paystack in production.
+    Called by Paystack. The signature is checked in every environment: an
+    unsigned or wrongly signed call is refused, whatever ENV says. (Locally,
+    use /webhook/simulate instead; Paystack can't reach localhost anyway.)
     """
-    if settings.ENV == "production":
-        if not settings.PAYSTACK_SECRET_KEY:
-            raise HTTPException(status_code=500, detail="Payment gateway not configured")
-
-        raw_body = await request.body()
-        expected_signature = hmac.new(
-            settings.PAYSTACK_SECRET_KEY.encode("utf-8"),
-            raw_body,
-            hashlib.sha512,
-        ).hexdigest()
-
-        if not x_paystack_signature or not hmac.compare_digest(expected_signature, x_paystack_signature):
-            raise HTTPException(status_code=401, detail="Invalid webhook signature")
-    else:
-        # In development, allow simulated requests if header is present
-        if not x_simulated:
-            print("Warning: Webhook received without X-Simulated header in development")
+    if not settings.PAYSTACK_SECRET_KEY:
+        raise HTTPException(status_code=503, detail="Payment gateway not configured")
+    if not verify_paystack_signature(await request.body(), x_paystack_signature):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
     # Process successful charge
     if webhook_data.event == "charge.success":
         reference = webhook_data.data.get("reference")
         if not reference:
             return {"status": "ignored", "reason": "No reference provided"}
-            
+
         await process_successful_payment(reference, webhook_data.data, db)
-        
+
     return {"status": "ok"}
 
 
@@ -156,13 +161,42 @@ async def simulate_webhook(
     db: AsyncSession = Depends(get_db)
 ):
     """
-    Simulated Webhook endpoint for local development.
+    Local development only: behave as if Paystack confirmed payment of the
+    order with this reference, for its full amount (so it goes through the
+    same checks as a real payment).
     """
-    if settings.ENV != "development":
-        raise HTTPException(status_code=403, detail="Simulation only allowed in development")
-        
-    await process_successful_payment(payload.reference, {"simulated": True}, db)
+    if not simulator_allowed():
+        raise HTTPException(status_code=403, detail="Payment simulation is only available in development with test keys")
+
+    order = (await db.execute(select(Order).where(Order.payment_reference == payload.reference))).scalar_one_or_none()
+    if order is None:
+        raise HTTPException(status_code=404, detail="No order has this payment reference")
+    await process_successful_payment(
+        payload.reference,
+        {"simulated": True, "reference": payload.reference, "currency": "NGN", "amount": _kobo(order.total_amount)},
+        db,
+    )
     return {"status": "success", "message": f"Payment simulated for {payload.reference}"}
+
+
+def _kobo(naira: float | None) -> int:
+    return int(round(float(naira or 0) * 100))
+
+
+def amount_problem(order: Order, gateway_response: dict) -> str | None:
+    """Why this charge can't pay for this order, or None if it covers it."""
+    data = gateway_response or {}
+    currency = data.get("currency")
+    if currency is not None and str(currency).upper() != "NGN":
+        return f"paid in {currency}, expected NGN"
+    try:
+        paid = int(data.get("amount"))
+    except (TypeError, ValueError):
+        return "no amount in the payment confirmation"
+    expected = _kobo(order.total_amount)
+    if paid < expected:
+        return f"paid {paid} kobo, order total is {expected} kobo"
+    return None
 
 
 def _metadata_order_id(gateway_response: dict) -> str | None:
@@ -192,6 +226,29 @@ async def process_successful_payment(reference: str, gateway_response: dict, db:
         order_id = _metadata_order_id(gateway_response)
     if order_id is None:
         logger.warning("Successful payment %s matched no order", reference)
+        return
+
+    # The amount must cover the order: a charge for less (or in another
+    # currency) is kept as evidence on the order but never marks it paid.
+    order = (await db.execute(select(Order).where(Order.id == order_id))).scalar_one_or_none()
+    if order is None:
+        return
+    problem = amount_problem(order, gateway_response)
+    if problem:
+        recorded = dict(order.payment_gateway_response or {})
+        rejected = list(recorded.get("rejected_payments", []))
+        if not any(r.get("reference") == reference for r in rejected):
+            rejected.append({
+                "reference": reference,
+                "received_at": datetime.now(timezone.utc).isoformat(),
+                "amount": (gateway_response or {}).get("amount"),
+                "currency": (gateway_response or {}).get("currency"),
+                "reason": problem,
+            })
+            recorded["rejected_payments"] = rejected
+            order.payment_gateway_response = recorded
+            await db.commit()
+        logger.error("PAYMENT NOT APPLIED to order %s (reference %s): %s - check and refund", order_id, reference, problem)
         return
 
     # One conditional UPDATE, so a payment and a cancellation racing each

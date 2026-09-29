@@ -79,7 +79,7 @@ async def get_admin_customers(
     query = (
         select(User, orders_count, paid_orders, total_spent, stats.c.last_order_at)
         .outerjoin(stats, stats.c.user_id == User.id)
-        .where(User.is_superuser == False)  # noqa: E712
+        .where(User.is_superuser == False, User.deleted_at.is_(None))  # noqa: E712
     )
     if search and search.strip():
         term = f"%{search.strip()}%"
@@ -107,21 +107,21 @@ async def get_customers_summary(db: AsyncSession, now: Optional[datetime] = None
     month_start = datetime.combine(now.date().replace(day=1), time.min, WAT).astimezone(timezone.utc)
     last_30 = (now - timedelta(days=30)).astimezone(timezone.utc)
 
-    customers = select(User.id).where(User.is_superuser == False)  # noqa: E712
+    customers = select(User.id).where(User.is_superuser == False, User.deleted_at.is_(None))  # noqa: E712
     total = (await db.execute(select(func.count()).select_from(customers.subquery()))).scalar_one()
-    new = (await db.execute(select(func.count(User.id)).where(User.is_superuser == False, User.created_at >= month_start))).scalar_one()  # noqa: E712
-    verified = (await db.execute(select(func.count(User.id)).where(User.is_superuser == False, User.email_verified == True))).scalar_one()  # noqa: E712
+    new = (await db.execute(select(func.count(User.id)).where(User.is_superuser == False, User.deleted_at.is_(None), User.created_at >= month_start))).scalar_one()  # noqa: E712
+    verified = (await db.execute(select(func.count(User.id)).where(User.is_superuser == False, User.deleted_at.is_(None), User.email_verified == True))).scalar_one()  # noqa: E712
 
     active = (await db.execute(
         select(func.count(func.distinct(Order.user_id)))
         .join(User, User.id == Order.user_id)
-        .where(User.is_superuser == False, Order.created_at >= last_30)  # noqa: E712
+        .where(User.is_superuser == False, User.deleted_at.is_(None), Order.created_at >= last_30)  # noqa: E712
     )).scalar_one()
 
     paid_per_user = (
         select(Order.user_id, func.count(Order.id).label("n"))
         .join(User, User.id == Order.user_id)
-        .where(User.is_superuser == False, MONEY_TAKEN)  # noqa: E712
+        .where(User.is_superuser == False, User.deleted_at.is_(None), MONEY_TAKEN)  # noqa: E712
         .group_by(Order.user_id)
         .subquery()
     )
@@ -144,7 +144,7 @@ async def get_customers_summary(db: AsyncSession, now: Optional[datetime] = None
 
 async def get_admin_customer_by_id(db: AsyncSession, customer_id: str):
     user = (await db.execute(select(User).where(User.id == customer_id))).scalar_one_or_none()
-    if not user:
+    if not user or user.deleted_at is not None:
         return None
 
     stats = _order_stats_subquery()
@@ -225,7 +225,7 @@ async def get_admin_customer_by_id(db: AsyncSession, customer_id: str):
 async def set_customer_active(db: AsyncSession, customer_id: str, is_active: bool) -> Optional[User]:
     """Deactivating blocks sign-in and ends the customer's existing sessions."""
     user = (await db.execute(
-        select(User).where(User.id == customer_id, User.is_superuser == False)  # noqa: E712
+        select(User).where(User.id == customer_id, User.is_superuser == False, User.deleted_at.is_(None))  # noqa: E712
     )).scalar_one_or_none()
     if not user:
         return None

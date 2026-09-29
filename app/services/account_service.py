@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import Request
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import hashlib
@@ -16,7 +16,12 @@ from jose import JWTError, jwt
 from app.core.config import settings
 from app.core.delivery_zones import DELIVERY_ZONES, ZONE_NAMES
 from app.core.security import get_password_hash, hash_token, verify_password
+from app.crud.order import ONGOING_STATUSES
 from app.models.address import SavedAddress
+from app.models.cart import Cart, CartItem
+from app.models.contact import ContactMessage
+from app.models.delivery import Delivery
+from app.models.order import Order
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.account import AddressIn, PasswordChange, ProfileUpdate
@@ -235,3 +240,71 @@ async def delete_address(db: AsyncSession, user: User, address_id: str) -> bool:
             nxt.is_default = True
     await db.commit()
     return True
+
+
+# ── Deleting an account ──────────────────────────────────────────────────
+
+DELETED_NAME = "Deleted customer"
+
+
+async def delete_account(db: AsyncSession, user: User, password: str) -> str:
+    """
+    Delete a customer's account, as the privacy policy promises. Returns the
+    email address it had, for the confirmation email.
+
+    Past orders are business records the law makes us keep, so they stay, but
+    without the customer's personal details: the user row is kept (orders
+    point at it) with everything personal wiped, and each order's contact
+    details and street address go too. Saved addresses, sessions and the cart
+    are deleted. Refused while an order is still in progress, since we'd need
+    those details to finish it.
+    """
+    if user.is_superuser:
+        raise AccountError("Staff accounts can't be deleted here. Ask the store owner.")
+    if not verify_password(password, user.hashed_password):
+        raise AccountError("That password isn't right.")
+
+    ongoing = (await db.execute(
+        select(Order.id).where(Order.user_id == user.id, Order.status.in_(ONGOING_STATUSES)).limit(1)
+    )).first()
+    if ongoing:
+        raise AccountError(
+            "You have an order in progress. You can delete your account once it's been delivered or cancelled."
+        )
+
+    email = user.email
+    orders = (await db.execute(select(Order).where(Order.user_id == user.id))).scalars().all()
+    for order in orders:
+        order.guest_info = None
+    order_ids = [o.id for o in orders]
+    if order_ids:
+        # Keep the area (zone and city, for delivery reports), drop the street address.
+        await db.execute(
+            update(Delivery).where(Delivery.order_id.in_(order_ids)).values(
+                address="Removed at the customer's request", apartment=None, landmark=None,
+                zip_code=None, instructions=None, delivery_pin=None,
+            )
+        )
+
+    await db.execute(delete(SavedAddress).where(SavedAddress.user_id == user.id))
+    await db.execute(delete(RefreshToken).where(RefreshToken.user_id == user.id))
+    cart_ids = select(Cart.id).where(Cart.user_id == user.id)
+    await db.execute(delete(CartItem).where(CartItem.cart_id.in_(cart_ids)))
+    await db.execute(delete(Cart).where(Cart.user_id == user.id))
+    # Messages already dealt with go; open ones stay (unlinked) so we can still reply.
+    await db.execute(delete(ContactMessage).where(ContactMessage.user_id == user.id, ContactMessage.status == "handled"))
+    await db.execute(update(ContactMessage).where(ContactMessage.user_id == user.id).values(user_id=None))
+
+    now = datetime.now(timezone.utc)
+    user.email = f"deleted-{user.id}@deleted.invalid"  # frees the address to sign up again
+    user.full_name = DELETED_NAME
+    user.phone = None
+    user.address = None
+    user.avatar_url = None
+    user.hashed_password = get_password_hash(hashlib.sha256(f"{user.id}{now.isoformat()}".encode()).hexdigest())
+    user.is_active = False
+    user.email_verified = False
+    user.email_verified_at = None
+    user.deleted_at = now
+    await db.commit()
+    return email

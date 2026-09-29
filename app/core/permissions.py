@@ -41,9 +41,10 @@ PERMISSIONS: dict[str, str] = {
     "customers.manage": "Deactivate and reactivate customers",
     "exports": "Download CSV exports",
     "activity.view": "See the activity log",
-    "settings.manage": "Change store details, delivery zones and payments",
+    "settings.manage": "Change store details, delivery zones, payments, the FAQ and legal pages",
     "staff.manage": "Add staff and change their roles",
     "notifications": "See low-stock alerts",
+    "messages": "Read and answer messages from the Contact page",
 }
 
 ROLE_PERMISSIONS: dict[str, set[str]] = {
@@ -58,6 +59,11 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
 ROUTE_PERMISSIONS: dict[tuple[str, str], str] = {
     ("GET", "/admin/dashboard"): "dashboard",
     ("GET", "/admin/inventory"): "inventory.view",
+    ("GET", "/admin/messages"): "messages",
+    ("GET", "/admin/messages/{message_id}"): "messages",
+    ("PATCH", "/admin/messages/{message_id}"): "messages",
+    ("POST", "/admin/messages/{message_id}/reply"): "messages",
+    ("DELETE", "/admin/messages/{message_id}"): "messages",
     ("GET", "/admin/notifications"): "notifications",
     ("POST", "/admin/notifications/read-all"): "notifications",
     ("POST", "/admin/notifications/{notification_id}/read"): "notifications",
@@ -70,6 +76,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], str] = {
     ("GET", "/admin/settings"): "settings.manage",
     ("PUT", "/admin/settings/store"): "settings.manage",
     ("PUT", "/admin/settings/zones"): "settings.manage",
+    ("GET", "/admin/faqs"): "settings.manage",
+    ("PUT", "/admin/faqs"): "settings.manage",
+    ("GET", "/admin/pages/{slug}"): "settings.manage",
+    ("PUT", "/admin/pages/{slug}"): "settings.manage",
     ("POST", "/admin/upload"): "products.edit",
     ("GET", "/admin/products"): "products.view",
     ("GET", "/admin/products/{product_id}"): "products.view",

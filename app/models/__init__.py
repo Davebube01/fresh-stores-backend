@@ -10,3 +10,6 @@ from app.models.settings import StoreSettings, DeliveryZone
 from app.models.notification import AdminNotification
 from app.models.activity import ActivityLog
 from app.models.address import SavedAddress
+from app.models.contact import ContactMessage, ContactReply
+from app.models.faq import FaqItem
+from app.models.legal import LegalPage

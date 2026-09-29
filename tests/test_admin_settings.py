@@ -58,6 +58,7 @@ async def test_store_details_save_and_show_publicly(client: AsyncClient, admin, 
 
     public = (await client.get("/api/v1/store")).json()
     assert public["pickup_address"] == "Plot 12, Wuse 2"
+    assert public["about_story"] is None  # not written yet: the page uses its default
     assert "low_stock_threshold" not in public
 
     # The threshold drives the inventory page.
@@ -101,3 +102,16 @@ async def test_zone_list_rules(client: AsyncClient, admin):
         {"name": "Kubwa", "fee": 1}, {"name": "kubwa", "fee": 2},
     ]})
     assert dupes.status_code == 400 and "twice" in dupes.json()["detail"]
+
+
+
+@pytest.mark.asyncio
+async def test_about_page_text(client: AsyncClient, admin):
+    base = (await client.get("/admin/settings")).json()["store"]
+    story = "We started in Wuse 2.\n\nEvery goat is checked by a vet."
+    res = await client.put("/admin/settings/store", json={**base, "about_headline": " Our story ", "about_story": story})
+    assert res.status_code == 200
+    public = (await client.get("/api/v1/store")).json()
+    assert public["about_headline"] == "Our story" and public["about_story"] == story
+    too_long = await client.put("/admin/settings/store", json={**base, "about_story": "x" * 4001})
+    assert too_long.status_code == 422

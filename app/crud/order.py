@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-import random
+import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
@@ -295,7 +295,7 @@ async def set_dispatch_info(db: AsyncSession, order_id: str, dispatch: DispatchU
     # re-dispatching (e.g. correcting a phone number) shouldn't invalidate a
     # PIN the customer may already have noted down.
     if not db_order.delivery.delivery_pin:
-        db_order.delivery.delivery_pin = f"{random.randint(0, 9999):04d}"
+        db_order.delivery.delivery_pin = f"{secrets.randbelow(10_000):04d}"
 
     await db.commit()
     return await get_order(db, order_id)
