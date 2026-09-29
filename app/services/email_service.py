@@ -73,3 +73,28 @@ async def send_verification_email(email: str, full_name: str | None, verify_url:
     ========================================================
     """
     logger.info(f"Delivering verification email to {email}:\n{email_body}")
+
+
+async def send_password_reset_email(email: str, full_name: str | None, reset_url: str, minutes: int) -> None:
+    """Simulated like the others: logs the message (and link) to the backend console."""
+    greeting = f"Hi {full_name}," if full_name else "Hi,"
+    email_body = f"""
+    ========================================================
+    To: {email}
+    Subject: Reset your password - Everything Fresh
+    ========================================================
+    {greeting}
+
+    Someone (hopefully you) asked to reset the password for your
+    Everything Fresh account.
+
+    >> CHOOSE A NEW PASSWORD:
+    {reset_url}
+
+    This link works once and expires in {minutes} minutes. If you didn't
+    ask for this, you can ignore this email: your password won't change.
+
+    The Everything Fresh team
+    ========================================================
+    """
+    logger.info(f"Delivering password reset email to {email}:\n{email_body}")

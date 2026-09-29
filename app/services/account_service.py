@@ -8,6 +8,12 @@ from fastapi import Request
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import hashlib
+from datetime import timedelta
+
+from jose import JWTError, jwt
+
+from app.core.config import settings
 from app.core.delivery_zones import DELIVERY_ZONES, ZONE_NAMES
 from app.core.security import get_password_hash, hash_token, verify_password
 from app.models.address import SavedAddress
@@ -69,6 +75,58 @@ async def change_password(db: AsyncSession, request: Request, user: User, body: 
     user.hashed_password = get_password_hash(body.new_password)
     await db.flush()
     return await sign_out_other_sessions(db, request, user)
+
+
+# ── Password reset ───────────────────────────────────────────────────────
+
+RESET_MINUTES = 60
+RESET_PURPOSE = "reset_password"
+
+
+def _password_fingerprint(user: User) -> str:
+    # Changes whenever the password does, so a reset link dies the moment it
+    # (or any other password change) is used.
+    return hashlib.sha256(user.hashed_password.encode()).hexdigest()[:16]
+
+
+def create_reset_token(user: User) -> str:
+    return jwt.encode(
+        {
+            "sub": user.email,
+            "type": RESET_PURPOSE,
+            "pwd": _password_fingerprint(user),
+            "exp": datetime.now(timezone.utc) + timedelta(minutes=RESET_MINUTES),
+        },
+        settings.SECRET_KEY,
+        algorithm=settings.ALGORITHM,
+    )
+
+
+async def reset_password(db: AsyncSession, token: str, new_password: str) -> User:
+    """Set a new password from a reset link. Signs out every session."""
+    invalid = AccountError("This reset link is invalid or has expired. Ask for a new one.")
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+    except JWTError:
+        raise invalid
+    if payload.get("type") != RESET_PURPOSE or not payload.get("sub"):
+        raise invalid
+    user = (await db.execute(select(User).where(User.email == payload["sub"]))).scalar_one_or_none()
+    if user is None or not user.is_active or payload.get("pwd") != _password_fingerprint(user):
+        raise invalid
+
+    user.hashed_password = get_password_hash(new_password)
+    if not user.email_verified:
+        # Using the link proves they hold the mailbox.
+        user.email_verified = True
+        user.email_verified_at = datetime.now(timezone.utc)
+    await db.execute(
+        update(RefreshToken)
+        .where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+        .values(revoked_at=datetime.now(timezone.utc))
+    )
+    await db.commit()
+    return user
 
 
 # ── Addresses ────────────────────────────────────────────────────────────

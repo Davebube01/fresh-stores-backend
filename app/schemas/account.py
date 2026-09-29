@@ -65,3 +65,17 @@ class AddressOut(AddressIn):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field(max_length=254)
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str = Field(max_length=2000)
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def _new(cls, v: str) -> str:
+        return _validate_password(v)
