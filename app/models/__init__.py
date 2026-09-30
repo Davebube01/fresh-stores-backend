@@ -13,3 +13,4 @@ from app.models.address import SavedAddress
 from app.models.contact import ContactMessage, ContactReply
 from app.models.faq import FaqItem
 from app.models.legal import LegalPage
+from app.models.till import TillCount

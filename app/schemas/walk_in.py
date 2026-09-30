@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -35,6 +35,10 @@ class WalkInSaleCreate(BaseModel):
     customer_phone: str | None = Field(default=None, max_length=30)
     discount_amount: float = Field(default=0, ge=0)
     discount_note: str | None = Field(default=None, max_length=200)
+    # Cash only: what the customer handed over (for the change on the receipt).
+    cash_tendered: float | None = Field(default=None, ge=0, le=100_000_000)
+    # A unique key per sale from the till; retrying with it can't sell twice.
+    client_ref: str | None = Field(default=None, min_length=8, max_length=64)
 
 
 class VoidSaleRequest(BaseModel):
@@ -43,6 +47,7 @@ class VoidSaleRequest(BaseModel):
 
 class WalkInSaleRow(AdminOrderRow):
     served_by_name: str | None = None
+    cash_tendered: float | None = None
 
 
 class SalesSummary(BaseModel):
@@ -54,7 +59,49 @@ class SalesSummary(BaseModel):
     voided_total: float
 
 
+class TillCountIn(BaseModel):
+    opening_float: float = Field(default=0, ge=0, le=100_000_000)
+    counted_cash: float = Field(ge=0, le=100_000_000)
+    note: str | None = Field(default=None, max_length=300)
+
+
+class TillCountOut(BaseModel):
+    day: date
+    opening_float: float
+    counted_cash: float
+    expected_cash: float
+    # counted - expected at the time of the count: negative = short.
+    difference: float
+    note: str | None = None
+    counted_by: str | None = None
+    counted_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class TopItem(BaseModel):
+    product_id: str
+    name: str
+    quantity: int
+    total: float
+
+
+class HourTotal(BaseModel):
+    hour: int  # 0-23, Abuja time
+    count: int
+    total: float
+
+
 class SalesDay(BaseModel):
     date: date
     summary: SalesSummary
     sales: list[WalkInSaleRow]
+    # Cash that should be in the till before any float: the day's cash sales.
+    cash_expected: float
+    till: TillCountOut | None = None
+    top_items: list[TopItem] = []
+    hourly: list[HourTotal] = []
+    # Only for roles that can see costs; None otherwise.
+    profit: float | None = None
+    # False when some lines have no cost price, so profit is understated.
+    profit_complete: bool = True

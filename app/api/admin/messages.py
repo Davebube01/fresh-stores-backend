@@ -3,11 +3,12 @@ from datetime import datetime, timezone
 from typing import Literal, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.models.contact import ContactMessage, ContactReply
+from app.models.notification import AdminNotification
 from app.models.order import Order
 from app.schemas.contact import ContactInbox, ContactOut, ContactReplyIn, ContactStatusUpdate, Topic
 from app.services.activity_service import actor_label, log_activity
@@ -43,6 +44,16 @@ async def _get(db: AsyncSession, message_id: str) -> ContactMessage:
     if msg is None:
         raise HTTPException(status_code=404, detail="Message not found")
     return msg
+
+
+async def _clear_notification(db: AsyncSession, message_id: str) -> None:
+    """Once a message is dealt with, its bell notification has done its job."""
+    await db.execute(
+        update(AdminNotification)
+        .where(AdminNotification.kind == "contact_message", AdminNotification.link.like(f"%open={message_id}"),
+               AdminNotification.read_at.is_(None))
+        .values(read_at=datetime.now(timezone.utc))
+    )
 
 
 def _mark(msg: ContactMessage, status: str, admin) -> None:
@@ -104,6 +115,8 @@ async def update_message(
 ):
     msg = await _get(db, message_id)
     _mark(msg, body.status, admin)
+    if body.status == "handled":
+        await _clear_notification(db, msg.id)
     await db.commit()
     await db.refresh(msg)
     return await _out(db, msg)
@@ -123,6 +136,7 @@ async def reply_to_message(
     msg.replies.append(ContactReply(body=body.body, sent_by=actor_label(admin)))
     if body.mark_handled:
         _mark(msg, "handled", admin)
+    await _clear_notification(db, msg.id)
     await db.commit()
     await db.refresh(msg)
     background_tasks.add_task(send_contact_reply_email, msg.email, msg.name, body.body, msg.message, store.store_name)
@@ -136,6 +150,7 @@ async def delete_message(message_id: str, db: AsyncSession = Depends(get_db), ad
     """For spam and mistakes. Replies go with it."""
     msg = await _get(db, message_id)
     name = msg.name
+    await _clear_notification(db, msg.id)
     await db.delete(msg)
     await db.commit()
     await log_activity(db, admin, "message.deleted", "message", f"Deleted a message from {name}", entity_label=name)

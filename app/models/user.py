@@ -25,6 +25,9 @@ class User(Base):
     # email). Guest orders are only attached to an account after this.
     email_verified = Column(Boolean, nullable=False, default=False, server_default=false())
     email_verified_at = Column(DateTime(timezone=True), nullable=True)
+    # Staff only: the password is one an owner set (new account or reset) and
+    # the staff member hasn't replaced it yet. The admin nags until they do.
+    password_is_temporary = Column(Boolean, nullable=False, default=False, server_default=false())
     # Set when the customer deleted their account. The row stays (past orders
     # point at it) but every personal detail on it has been wiped.
     deleted_at = Column(DateTime(timezone=True), nullable=True)

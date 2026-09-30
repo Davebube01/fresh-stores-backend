@@ -7,6 +7,7 @@ itself out of staff management.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -15,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.permissions import OWNER, PERMISSIONS, ROLE_LABELS, ROLE_PERMISSIONS, ROLES, role_of
 from app.core.security import get_password_hash
 from app.crud.refresh_token import revoke_all_user_sessions
+from app.services.auth_service import ADMIN
 from app.models.activity import ActivityLog
+from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.staff import StaffCreate, StaffUpdate
 
@@ -24,7 +27,7 @@ class StaffError(ValueError):
     pass
 
 
-def _member(user: User, last_signed_in_at=None) -> dict:
+def _member(user: User, last_signed_in_at=None, active_sessions: int = 0) -> dict:
     return {
         "id": user.id,
         "email": user.email,
@@ -34,6 +37,8 @@ def _member(user: User, last_signed_in_at=None) -> dict:
         "is_active": bool(user.is_active),
         "created_at": user.created_at,
         "last_signed_in_at": last_signed_in_at,
+        "password_is_temporary": bool(user.password_is_temporary),
+        "active_sessions": active_sessions,
     }
 
 
@@ -44,16 +49,24 @@ async def list_staff(db: AsyncSession) -> dict:
         .group_by(ActivityLog.actor_id)
         .subquery()
     )
+    sessions = (
+        select(RefreshToken.user_id, func.count(func.distinct(RefreshToken.family_id)).label("n"))
+        .where(RefreshToken.realm == ADMIN.name, RefreshToken.revoked_at.is_(None),
+               RefreshToken.rotated_at.is_(None), RefreshToken.expires_at > datetime.now(timezone.utc))
+        .group_by(RefreshToken.user_id)
+        .subquery()
+    )
     rows = (
         await db.execute(
-            select(User, last_sign_in.c.at)
+            select(User, last_sign_in.c.at, sessions.c.n)
             .outerjoin(last_sign_in, last_sign_in.c.actor_id == User.id)
+            .outerjoin(sessions, sessions.c.user_id == User.id)
             .where(User.is_superuser == True)  # noqa: E712
             .order_by(User.is_active.desc(), User.created_at)
         )
     ).all()
     return {
-        "staff": [_member(u, at) for u, at in rows],
+        "staff": [_member(u, at, n or 0) for u, at, n in rows],
         "roles": [{"key": r, "label": ROLE_LABELS[r], "permissions": sorted(ROLE_PERMISSIONS[r])} for r in ROLES],
         "permissions": PERMISSIONS,
     }
@@ -80,6 +93,7 @@ async def create_staff(db: AsyncSession, data: StaffCreate) -> dict:
         staff_role=data.role,
         # The owner vouches for the address; there's no verification email for staff.
         email_verified=True,
+        password_is_temporary=True,
     )
     db.add(user)
     await db.commit()
@@ -133,12 +147,23 @@ async def reset_staff_password(db: AsyncSession, staff_id: str, password: str) -
     if user is None:
         return None
     user.hashed_password = get_password_hash(password)
+    user.password_is_temporary = True
     await db.commit()
     await revoke_all_user_sessions(db, user.id)
+    return user
+
+
+async def sign_out_staff(db: AsyncSession, staff_id: str) -> Optional[User]:
+    """End every admin session a staff member has (e.g. a lost phone), without deactivating them."""
+    user = await get_staff_user(db, staff_id)
+    if user is None:
+        return None
+    await revoke_all_user_sessions(db, user.id, realm=ADMIN.name)
     return user
 
 
 async def change_own_password(db: AsyncSession, user: User, new_password: str) -> None:
     db_user = await db.get(User, user.id)
     db_user.hashed_password = get_password_hash(new_password)
+    db_user.password_is_temporary = False
     await db.commit()

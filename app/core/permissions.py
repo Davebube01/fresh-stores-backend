@@ -71,7 +71,10 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], str] = {
     ("POST", "/admin/sales"): "sales.create",
     ("GET", "/admin/sales/{sale_id}"): "sales.view",
     ("POST", "/admin/sales/{sale_id}/void"): "sales.void",
+    ("PUT", "/admin/sales/till/{day}"): "sales.create",
     ("GET", "/admin/activity"): "activity.view",
+    ("GET", "/admin/activity/summary"): "activity.view",
+    ("GET", "/admin/exports"): "exports",
     ("GET", "/admin/exports/{dataset}.csv"): "exports",
     ("GET", "/admin/settings"): "settings.manage",
     ("PUT", "/admin/settings/store"): "settings.manage",
@@ -107,6 +110,7 @@ ROUTE_PERMISSIONS: dict[tuple[str, str], str] = {
     ("POST", "/admin/staff"): "staff.manage",
     ("PUT", "/admin/staff/{staff_id}"): "staff.manage",
     ("POST", "/admin/staff/{staff_id}/reset-password"): "staff.manage",
+    ("POST", "/admin/staff/{staff_id}/sign-out"): "staff.manage",
 }
 
 

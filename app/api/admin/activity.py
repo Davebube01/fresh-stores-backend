@@ -6,8 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.pagination import MAX_PAGE_SIZE
-from app.schemas.activity import ActivityPage
-from app.services.activity_service import list_activity
+from app.schemas.activity import ActivityPage, ActivitySummary
+from app.services.activity_service import activity_summary, list_activity
 from app.utils.dependencies import get_current_active_superuser
 
 router = APIRouter()
@@ -23,6 +23,7 @@ async def get_activity(
     q: Optional[str] = Query(None, max_length=100),
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
+    flagged: bool = False,
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
     db: AsyncSession = Depends(get_db),
@@ -31,5 +32,17 @@ async def get_activity(
     """Admin actions, newest first, with optional filters and a total for paging."""
     return await list_activity(
         db, entity_type=entity_type, entity_id=entity_id, actor_id=actor_id, search=q,
-        date_from=date_from, date_to=date_to, skip=skip, limit=limit,
+        date_from=date_from, date_to=date_to, flagged=flagged, skip=skip, limit=limit,
     )
+
+
+@router.get("/summary", response_model=ActivitySummary)
+async def get_activity_summary(
+    q: Optional[str] = Query(None, max_length=100),
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    db: AsyncSession = Depends(get_db),
+    current_admin=Depends(get_current_active_superuser),
+):
+    """Counts by type, by person and flagged, for the filters on the Activity page."""
+    return await activity_summary(db, search=q, date_from=date_from, date_to=date_to)

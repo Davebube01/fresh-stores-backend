@@ -15,6 +15,10 @@ class ActivityEntry(BaseModel):
     summary: str
     changes: dict[str, Any] | None = None
     created_at: datetime
+    # Worth a second look (voids, cancellations, deletions, staff changes, exports).
+    flagged: bool = False
+    # Where its subject lives in the admin, if it still exists.
+    link: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -22,3 +26,16 @@ class ActivityEntry(BaseModel):
 class ActivityPage(BaseModel):
     items: list[ActivityEntry]
     total: int
+
+
+class ActivityActor(BaseModel):
+    id: str
+    name: str
+    count: int
+
+
+class ActivitySummary(BaseModel):
+    total: int
+    flagged: int
+    types: dict[str, int]
+    actors: list[ActivityActor]

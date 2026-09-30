@@ -99,6 +99,9 @@ async def test_reply_is_kept_and_marks_handled(client: AsyncClient, session_fact
         assert res["status"] == "handled" and res["handled_by"] == "Owner"
         assert [(r["body"], r["sent_by"]) for r in res["replies"]] == [("Yes, we can. Call us on 0803 000 0000.", "Owner")]
 
+        async with session_factory() as db:
+            note = (await db.execute(select(AdminNotification))).scalar_one()
+        assert note.read_at is not None  # the bell stops nagging once it's answered
         again = (await client.post(f"/admin/messages/{mid}/reply", json={"body": "One more thing.", "mark_handled": False})).json()
         assert len(again["replies"]) == 2 and again["status"] == "handled"  # replying doesn't reopen it
         activity = (await client.get("/admin/activity")).json()

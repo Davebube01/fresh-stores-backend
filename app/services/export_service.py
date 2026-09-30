@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import csv
 import io
+import re
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterable, Literal, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -33,6 +34,45 @@ WAT = timezone(timedelta(hours=1))
 Dataset = Literal["orders", "sale_lines", "products", "customers", "stock_movements", "activity"]
 # Datasets that take a date range (the rest are a snapshot of now).
 DATED = {"orders", "sale_lines", "stock_movements", "activity"}
+
+# Besides "exports", what a role needs to download each one: exports mustn't
+# become a side door to data the role can't see in the admin.
+DATASET_PERMISSIONS: dict[str, str] = {
+    "orders": "orders.view",
+    "sale_lines": "costs.view",
+    "stock_movements": "inventory.view",
+    "activity": "activity.view",
+    "products": "costs.view",
+    "customers": "customers.view",
+}
+
+HEADERS: dict[str, list[str]] = {
+    "orders": ["Date", "Order", "Channel", "Status", "Customer", "Email", "Phone", "Delivery method", "Zone",
+               "Payment method", "Paid at", "Items", "Subtotal", "Discount", "Delivery fee (paid to courier)",
+               "Total", "Cancellation reason"],
+    "sale_lines": ["Date", "Order", "Channel", "Status", "Product", "Size / cut", "Quantity", "Stock used",
+                   "Unit price", "Line total", "Unit cost", "Line cost", "Line profit"],
+    "products": ["Product", "Slug", "Category", "Active", "Price", "Sizes", "Cuts", "Cost price (per stock unit)",
+                 "In stock", "Low-stock alert at", "Stock value at cost", "Stock value at price"],
+    "customers": ["Name", "Email", "Phone", "Status", "Email verified", "Joined", "Orders", "Paid orders",
+                  "Total spent", "Last order"],
+    "stock_movements": ["Date", "Product", "Change", "Before", "After", "Reason", "Note", "Order", "By"],
+    "activity": ["Date", "Who", "Action", "What", "Summary", "Flagged"],
+}
+
+_NUMBER = re.compile(r"^[+-]?\d+(\.\d+)?$")
+
+
+def _cell(value):
+    """
+    Text that a spreadsheet would run as a formula (=, +, -, @ at the start)
+    gets a leading apostrophe. Names, notes and messages come from customers
+    and staff, so a CSV must never carry a live formula. Plain numbers
+    (e.g. a stock change of -2) are left alone.
+    """
+    if isinstance(value, str) and value and value[0] in "=+-@\t\r" and not _NUMBER.match(value):
+        return "'" + value
+    return value
 
 
 def _when(dt: Optional[datetime]) -> str:
@@ -64,7 +104,7 @@ def to_csv(header: list[str], rows: Iterable[list]) -> str:
     buf.write("﻿")
     writer = csv.writer(buf, lineterminator="\r\n")
     writer.writerow(header)
-    writer.writerows(rows)
+    writer.writerows([_cell(v) for v in row] for row in rows)
     return buf.getvalue()
 
 
@@ -80,6 +120,8 @@ def _in_range(column, start, end) -> list:
 
 def _customer(order: Order) -> tuple[str, str, str]:
     guest = order.guest_info or {}
+    if order.user is not None and order.user.deleted_at is not None:
+        return "Deleted customer", "", ""  # they asked for their details to go
     if order.user is not None:
         return order.user.full_name or "", order.user.email or "", order.user.phone or guest.get("phone") or ""
     return guest.get("fullName") or "", guest.get("email") or "", guest.get("phone") or ""
@@ -98,9 +140,7 @@ async def _orders(db: AsyncSession, start, end) -> list[Order]:
 
 
 async def export_orders(db: AsyncSession, start, end) -> str:
-    header = ["Date", "Order", "Channel", "Status", "Customer", "Email", "Phone", "Delivery method", "Zone",
-              "Payment method", "Paid at", "Items", "Subtotal", "Discount", "Delivery fee (paid to courier)",
-              "Total", "Cancellation reason"]
+    header = HEADERS["orders"]
     rows = []
     for o in await _orders(db, start, end):
         name, email, phone = _customer(o)
@@ -115,8 +155,7 @@ async def export_orders(db: AsyncSession, start, end) -> str:
 
 
 async def export_sale_lines(db: AsyncSession, start, end) -> str:
-    header = ["Date", "Order", "Channel", "Status", "Product", "Size / cut", "Quantity", "Stock used",
-              "Unit price", "Line total", "Unit cost", "Line cost", "Line profit"]
+    header = HEADERS["sale_lines"]
     rows = []
     for o in await _orders(db, start, end):
         for i in o.items:
@@ -134,8 +173,7 @@ async def export_sale_lines(db: AsyncSession, start, end) -> str:
 
 async def export_products(db: AsyncSession) -> str:
     default = await get_low_stock_threshold(db)
-    header = ["Product", "Slug", "Category", "Active", "Price", "Sizes", "Cuts", "Cost price (per stock unit)",
-              "In stock", "Low-stock alert at", "Stock value at cost", "Stock value at price"]
+    header = HEADERS["products"]
     products = (await db.execute(select(Product).order_by(Product.name))).scalars().all()
     rows = []
     for p in products:
@@ -152,8 +190,7 @@ async def export_products(db: AsyncSession) -> str:
 
 
 async def export_customers(db: AsyncSession) -> str:
-    header = ["Name", "Email", "Phone", "Status", "Email verified", "Joined", "Orders", "Paid orders",
-              "Total spent", "Last order"]
+    header = HEADERS["customers"]
     customers = await get_admin_customers(db, limit=100_000)
     rows = [[
         c["name"], c["email"], c["phone"] or "", c["status"], "Yes" if c["email_verified"] else "No",
@@ -163,7 +200,7 @@ async def export_customers(db: AsyncSession) -> str:
 
 
 async def export_stock_movements(db: AsyncSession, start, end) -> str:
-    header = ["Date", "Product", "Change", "Before", "After", "Reason", "Note", "Order", "By"]
+    header = HEADERS["stock_movements"]
     result = await db.execute(
         select(StockMovement, Product.name, User.full_name, User.email)
         .join(Product, Product.id == StockMovement.product_id)
@@ -178,18 +215,29 @@ async def export_stock_movements(db: AsyncSession, start, end) -> str:
     return to_csv(header, rows)
 
 
-async def export_activity(db: AsyncSession, start, end) -> str:
-    header = ["Date", "Who", "Action", "What", "Summary"]
+async def export_activity(db: AsyncSession, start, end, filters: Optional[dict] = None) -> str:
+    from app.services.activity_service import FLAGGED_ACTIONS, _filters
+
+    f = filters or {}
+    extra = _filters(f.get("entity_type"), None, f.get("actor_id"), f.get("q"), None, None, bool(f.get("flagged")))
+    header = HEADERS["activity"]
     entries = (
         await db.execute(
-            select(ActivityLog).where(*_in_range(ActivityLog.created_at, start, end)).order_by(ActivityLog.created_at)
+            select(ActivityLog).where(*_in_range(ActivityLog.created_at, start, end), *extra).order_by(ActivityLog.created_at)
         )
     ).scalars().all()
-    rows = [[_when(a.created_at), a.actor_name or "", a.action, a.entity_label or "", a.summary] for a in entries]
+    rows = [
+        [_when(a.created_at), a.actor_name or "", a.action, a.entity_label or "", a.summary,
+         "yes" if a.action in FLAGGED_ACTIONS else ""]
+        for a in entries
+    ]
     return to_csv(header, rows)
 
 
-async def build_export(db: AsyncSession, dataset: Dataset, date_from: Optional[date], date_to: Optional[date]) -> str:
+async def build_export(
+    db: AsyncSession, dataset: Dataset, date_from: Optional[date], date_to: Optional[date],
+    activity_filters: Optional[dict] = None,
+) -> str:
     start, end = _range(date_from, date_to)
     if dataset == "orders":
         return await export_orders(db, start, end)
@@ -201,7 +249,7 @@ async def build_export(db: AsyncSession, dataset: Dataset, date_from: Optional[d
         return await export_customers(db)
     if dataset == "stock_movements":
         return await export_stock_movements(db, start, end)
-    return await export_activity(db, start, end)
+    return await export_activity(db, start, end, activity_filters)
 
 
 def filename(dataset: Dataset, date_from: Optional[date], date_to: Optional[date], today: date) -> str:
@@ -217,3 +265,22 @@ def filename(dataset: Dataset, date_from: Optional[date], date_to: Optional[date
     else:
         span = "all-time"
     return f"{name}-{span}.csv"
+
+
+async def count_rows(db: AsyncSession, dataset: Dataset, date_from: Optional[date], date_to: Optional[date]) -> int:
+    """How many rows the export would have, without building it."""
+    start, end = _range(date_from, date_to)
+    if dataset == "orders":
+        q = select(func.count(Order.id)).where(*_in_range(Order.created_at, start, end))
+    elif dataset == "sale_lines":
+        q = select(func.count(OrderItem.id)).join(Order, Order.id == OrderItem.order_id).where(*_in_range(Order.created_at, start, end))
+    elif dataset == "stock_movements":
+        q = (select(func.count(StockMovement.id)).join(Product, Product.id == StockMovement.product_id)
+             .where(*_in_range(StockMovement.created_at, start, end)))
+    elif dataset == "activity":
+        q = select(func.count(ActivityLog.id)).where(*_in_range(ActivityLog.created_at, start, end))
+    elif dataset == "products":
+        q = select(func.count(Product.id))
+    else:
+        q = select(func.count(User.id)).where(User.is_superuser == False, User.deleted_at.is_(None))  # noqa: E712
+    return (await db.execute(q)).scalar_one()

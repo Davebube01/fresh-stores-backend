@@ -125,15 +125,14 @@ async def send_account_deleted_email(email: str, full_name: str | None) -> None:
 
 
 async def send_contact_reply_email(email: str, name: str, reply: str, original: str, store_name: str) -> None:
-    """Simulated like the others: logs the message to the backend console."""
+    """Simulated like the others: logs the message to the backend console.
+    The reply goes as written (staff write their own greeting)."""
     quoted = "\n".join(f"    > {line}" for line in original.splitlines())
     email_body = f"""
     ========================================================
     To: {email}
     Subject: Re: your message to {store_name}
     ========================================================
-    Hi {name.split()[0] if name.strip() else "there"},
-
 {reply}
 
     {store_name}

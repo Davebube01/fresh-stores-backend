@@ -17,6 +17,7 @@ class AdminUserResponse(BaseModel):
     is_active: bool
     is_superuser: bool
     staff_role: str | None = None
+    password_is_temporary: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -46,6 +47,10 @@ class StaffMember(BaseModel):
     is_active: bool
     created_at: datetime
     last_signed_in_at: datetime | None = None
+    # Still using the password an owner gave them.
+    password_is_temporary: bool = False
+    # Admin sessions that are still live (devices they're signed in on).
+    active_sessions: int = 0
 
 
 class RoleInfo(BaseModel):

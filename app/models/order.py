@@ -60,6 +60,13 @@ class Order(Base):
     # Taken off the subtotal at the counter; total_amount is already net of it.
     discount_amount = Column(Float, nullable=False, default=0.0, server_default="0")
     discount_note = Column(String, nullable=True)
+    # Walk-in cash sales: what the customer handed over, so the receipt can show change.
+    cash_tendered = Column(Float, nullable=True)
+    # Walk-in sales: a key the till sends with the sale. A retry with the same
+    # key (double tap, flaky network) returns the first sale instead of a second.
+    # unique + index: a unique index named ix_orders_client_ref, exactly what
+    # migration a2c8e4f6b9d1 creates, so fresh and migrated databases match.
+    client_ref = Column(String, unique=True, index=True, nullable=True)
 
     items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
     user = relationship("User", foreign_keys=[user_id])
