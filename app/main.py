@@ -31,6 +31,22 @@ async def _expire_unpaid_orders_forever():
         await asyncio.sleep(300)
 
 
+async def _deliver_pending_pushes_forever():
+    """Every few seconds, Web Push whatever's new in the admin notification bell."""
+    from app.core.database import AsyncSessionLocal
+    from app.services.push_service import deliver_pending
+
+    while True:
+        try:
+            async with AsyncSessionLocal() as session:
+                await deliver_pending(session)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.getLogger("push").exception("Push delivery sweep failed")
+        await asyncio.sleep(5)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Production schema changes go through `python -m app.db_migrate` (run by
@@ -54,8 +70,10 @@ async def lifespan(app: FastAPI):
         await load_delivery_zones(session)
 
     sweeper = asyncio.create_task(_expire_unpaid_orders_forever())
+    pusher = asyncio.create_task(_deliver_pending_pushes_forever())
     yield
     sweeper.cancel()
+    pusher.cancel()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

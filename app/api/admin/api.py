@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.core.permissions import enforce_route_permission
-from app.api.admin import products, categories, auth, customers, orders, dashboard, inventory, settings, notifications, sales, activity, exports, staff, messages, faqs, pages
+from app.api.admin import products, categories, auth, customers, orders, dashboard, inventory, settings, notifications, sales, activity, exports, staff, messages, faqs, pages, push
 
 admin_router = APIRouter()
 
@@ -11,6 +11,7 @@ admin_router.include_router(auth.router, prefix="/auth", tags=["admin-auth"])
 admin_router.include_router(dashboard.router, prefix="/dashboard", tags=["admin-dashboard"], dependencies=guarded)
 admin_router.include_router(inventory.router, prefix="/inventory", tags=["admin-inventory"], dependencies=guarded)
 admin_router.include_router(notifications.router, prefix="/notifications", tags=["admin-notifications"], dependencies=guarded)
+admin_router.include_router(push.router, prefix="/push", tags=["admin-push"], dependencies=guarded)
 admin_router.include_router(sales.router, prefix="/sales", tags=["admin-sales"], dependencies=guarded)
 admin_router.include_router(activity.router, prefix="/activity", tags=["admin-activity"], dependencies=guarded)
 admin_router.include_router(exports.router, prefix="/exports", tags=["admin-exports"], dependencies=guarded)

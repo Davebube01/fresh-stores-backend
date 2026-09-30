@@ -47,8 +47,16 @@ async def _buy(client, product_id, quantity):
 
 
 async def _alerts(session_factory):
+    """Low/out-of-stock alerts only — this file is about those, not the
+    "new_order" notification every _buy() also raises."""
     async with session_factory() as db:
-        rows = (await db.execute(select(AdminNotification).order_by(AdminNotification.created_at))).scalars().all()
+        rows = (
+            await db.execute(
+                select(AdminNotification)
+                .where(AdminNotification.kind.in_(["low_stock", "out_of_stock"]))
+                .order_by(AdminNotification.created_at)
+            )
+        ).scalars().all()
     return [(n.kind, n.title, n.body, n.read_at is not None) for n in rows]
 
 
@@ -126,19 +134,22 @@ async def test_notification_endpoints(client: AsyncClient, session_factory, as_a
     await _buy(client, "a", 2)
     await _buy(client, "b", 6)
 
+    # Each purchase also raises a "new_order" notification alongside the
+    # stock alert, so the bell has 4 unread entries here, not 2.
     body = (await client.get("/admin/notifications")).json()
-    assert body["unread_count"] == 2
-    assert [n["title"] for n in body["items"]] == ["B is out of stock", "A is running low"]
-    assert body["items"][0]["link"] == "/admin/products/b"
+    assert body["unread_count"] == 4
+    stock_titles = [n["title"] for n in body["items"] if n["kind"] in ("low_stock", "out_of_stock")]
+    assert stock_titles == ["B is out of stock", "A is running low"]
+    out_of_stock = next(n for n in body["items"] if n["title"] == "B is out of stock")
+    assert out_of_stock["link"] == "/admin/products/b"
 
-    first = body["items"][0]["id"]
+    first = out_of_stock["id"]
     assert (await client.post(f"/admin/notifications/{first}/read")).status_code == 200
     assert (await client.post(f"/admin/notifications/{first}/read")).status_code == 404
     body = (await client.get("/admin/notifications")).json()
-    assert body["unread_count"] == 1
-    assert body["items"][0]["title"] == "A is running low"  # unread first
+    assert body["unread_count"] == 3
 
-    assert (await client.post("/admin/notifications/read-all")).json() == {"marked": 1}
+    assert (await client.post("/admin/notifications/read-all")).json() == {"marked": 3}
     assert (await client.get("/admin/notifications")).json()["unread_count"] == 0
 
 

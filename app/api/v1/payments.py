@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.core.database import get_db
 from app.core.payment_window import payment_deadline
 from app.crud.order import UNPAID_STATUSES, cancel_order
+from app.models.notification import AdminNotification
 from app.models.user import User
 from app.utils.dependencies import get_optional_current_user
 from app.models.order import Order, OrderStatus
@@ -285,6 +286,12 @@ async def process_successful_payment(reference: str, gateway_response: dict, db:
         order.paid_at = now
         order.payment_reference = reference
         order.payment_gateway_response = gateway_response
+        db.add(AdminNotification(
+            kind="refund_due",
+            title=f"Refund needed — order {order.id[:8]}",
+            body=f"₦{order.total_amount:,.0f} was paid on a cancelled order. Refund via Paystack.",
+            link=f"/admin/orders/{order.id}",
+        ))
         await db.commit()
         logger.warning("PAYMENT RECEIVED FOR CANCELLED ORDER %s (reference %s) - refund needed", order.id, reference)
         return
@@ -303,6 +310,12 @@ async def process_successful_payment(reference: str, gateway_response: dict, db:
             })
             recorded["extra_payments"] = extra
             order.payment_gateway_response = recorded
+            db.add(AdminNotification(
+                kind="refund_due",
+                title=f"Duplicate payment — order {order.id[:8]}",
+                body=f"The customer paid twice for the same order. Refund the extra ₦{order.total_amount:,.0f} via Paystack.",
+                link=f"/admin/orders/{order.id}",
+            ))
             await db.commit()
             logger.error(
                 "DUPLICATE PAYMENT for order %s (reference %s; order was already paid with %s) - refund needed",

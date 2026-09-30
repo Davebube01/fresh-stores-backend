@@ -129,6 +129,19 @@ async def process_checkout(db: AsyncSession, order_in: OrderCreate, user_id: Opt
                 await db.delete(item)
             await db.commit()
 
+    # New order: surfaced in the admin bell and, from there, pushed to the
+    # admin PWA. Not gated on anything succeeding after this point (delivery
+    # info, cart cleanup) — the order itself is already committed by now.
+    from app.models.notification import AdminNotification
+    item_count = sum(item["quantity"] for item in items_to_create)
+    db.add(AdminNotification(
+        kind="new_order",
+        title=f"New order — ₦{total_amount:,.0f}",
+        body=f"{item_count} item{'s' if item_count != 1 else ''} · {getattr(order.delivery_method, 'value', order.delivery_method)}",
+        link=f"/admin/orders/{order.id}",
+    ))
+    await db.commit()
+
     # Stock changed — the public product cache would otherwise keep serving
     # a now-inaccurate stock level for up to its TTL.
     clear_product_caches()

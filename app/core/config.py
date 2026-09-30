@@ -74,6 +74,13 @@ class Settings(BaseSettings):
     CLOUDINARY_API_KEY: str | None = None
     CLOUDINARY_API_SECRET: str | None = None
 
+    # Web Push for the admin PWA. Without a key pair, push sends are skipped
+    # (logged, not raised) rather than breaking the action that triggered them —
+    # a failed push should never stop an order from being saved.
+    VAPID_PUBLIC_KEY: str | None = None
+    VAPID_PRIVATE_KEY: str | None = None
+    VAPID_SUBJECT: str = "mailto:owner@example.com"
+
     ENV: str = "development"
     
     @property

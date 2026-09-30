@@ -19,7 +19,8 @@ class AdminNotification(Base):
     __tablename__ = "admin_notifications"
 
     id = Column(String, primary_key=True, default=generate_uuid)
-    # "low_stock" | "out_of_stock"
+    # "low_stock" | "out_of_stock" | "contact_message" | "new_order" |
+    # "order_cancelled" | "refund_due"
     kind = Column(String, nullable=False, index=True)
     title = Column(String, nullable=False)
     body = Column(String, nullable=True)
@@ -28,4 +29,8 @@ class AdminNotification(Base):
     # Not a foreign key: alerts shouldn't stop a product being deleted.
     product_id = Column(String, nullable=True, index=True)
     read_at = Column(DateTime(timezone=True), nullable=True)
+    # Set once a Web Push has gone out for this row (see push_service.deliver_pending),
+    # so the delivery sweep never sends the same alert twice. Independent of
+    # read_at: an admin might read it in the bell before the sweep even runs.
+    pushed_at = Column(DateTime(timezone=True), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)

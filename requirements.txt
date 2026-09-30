@@ -12,6 +12,7 @@ pydantic-settings==2.15.0
 passlib[bcrypt]==1.7.4
 bcrypt==3.2.2
 python-jose[cryptography]==3.5.0
+pywebpush>=2.0.0
 python-multipart==0.0.32
 pytest==9.1.1
 pytest-asyncio==1.4.0

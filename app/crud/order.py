@@ -209,6 +209,20 @@ async def cancel_order(
 
     for item in db_order.items:
         await restore_stock(db, item.product_id, item.quantity * (item.stock_units or 1), order_id=order_id)
+
+    # Worth an admin's attention only when the *customer* cancels — something
+    # unexpected they need to react to (release a courier, follow up). An
+    # admin's own cancel needs no alert, and the expiry sweep runs on every
+    # abandoned cart, which would otherwise spam the bell all day.
+    if cancelled_by == "customer":
+        from app.models.notification import AdminNotification
+        db.add(AdminNotification(
+            kind="order_cancelled",
+            title="Order cancelled by customer",
+            body=reason,
+            link=f"/admin/orders/{order_id}",
+        ))
+
     await db.commit()
     clear_product_caches()
 
